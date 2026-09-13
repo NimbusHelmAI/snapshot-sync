@@ -59,6 +59,7 @@ export const SnapshotComparison: React.FC = () => {
   const [selectedConfigs, setSelectedConfigs] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expandedConfigs, setExpandedConfigs] = useState<Set<string>>(new Set());
   const [showSettings, setShowSettings] = useState(false);
 
   const saveSettings = (newSettings: AppSettings) => {
@@ -109,6 +110,16 @@ export const SnapshotComparison: React.FC = () => {
       newSelected.add(configName);
     }
     setSelectedConfigs(newSelected);
+  };
+
+  const toggleExpanded = (configName: string) => {
+    const newExpanded = new Set(expandedConfigs);
+    if (newExpanded.has(configName)) {
+      newExpanded.delete(configName);
+    } else {
+      newExpanded.add(configName);
+    }
+    setExpandedConfigs(newExpanded);
   };
 
   const handleSync = async (direction: 'leftToRight' | 'rightToLeft') => {
@@ -176,6 +187,8 @@ export const SnapshotComparison: React.FC = () => {
           disk={left}
           selectedConfigs={selectedConfigs}
           onToggleConfig={toggleConfig}
+          expandedConfigs={expandedConfigs}
+          onToggleExpanded={toggleExpanded}
         />
 
         <div className={styles.center}>
@@ -201,6 +214,8 @@ export const SnapshotComparison: React.FC = () => {
           disk={right}
           selectedConfigs={selectedConfigs}
           onToggleConfig={toggleConfig}
+          expandedConfigs={expandedConfigs}
+          onToggleExpanded={toggleExpanded}
         />
       </div>
 
@@ -215,12 +230,16 @@ interface DiskPanelProps {
   disk: DiskSide;
   selectedConfigs: Set<string>;
   onToggleConfig: (name: string) => void;
+  expandedConfigs: Set<string>;
+  onToggleExpanded: (name: string) => void;
 }
 
 const DiskPanel: React.FC<DiskPanelProps> = ({
   disk,
   selectedConfigs,
   onToggleConfig,
+  expandedConfigs,
+  onToggleExpanded,
 }) => {
   const icon = disk.type === 'local' ? '💾' : '💿';
 
@@ -233,19 +252,33 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
 
       <div className={styles.configList}>
         {disk.configs.map((cfg) => (
-          <div key={cfg.name} className={styles.configItem}>
-            <input
-              type="checkbox"
-              checked={selectedConfigs.has(cfg.name)}
-              onChange={() => onToggleConfig(cfg.name)}
-            />
-            <div className={styles.configInfo}>
-              <div className={styles.configName}>{cfg.name}</div>
-              <div className={styles.configMeta}>
-                📷 {cfg.snapshotCount} snapshots
-                {cfg.lastBackup && ` • ${cfg.lastBackup}`}
+          <div key={cfg.name}>
+            <div className={styles.configItem}>
+              <input
+                type="checkbox"
+                checked={selectedConfigs.has(cfg.name)}
+                onChange={() => onToggleConfig(cfg.name)}
+              />
+              <div className={styles.configInfo}>
+                <div className={styles.configName}>{cfg.name}</div>
+                <div className={styles.configMeta}>
+                  📷 {cfg.snapshotCount} snapshots
+                  {cfg.lastBackup && ` • ${cfg.lastBackup}`}
+                </div>
               </div>
+              <button
+                className={styles.expandButton}
+                onClick={() => onToggleExpanded(cfg.name)}
+                title={expandedConfigs.has(cfg.name) ? 'Collapse' : 'Expand'}
+              >
+                {expandedConfigs.has(cfg.name) ? '▼' : '▶'}
+              </button>
             </div>
+            {expandedConfigs.has(cfg.name) && (
+              <div className={styles.snapshotList}>
+                <p className={styles.snapshotPlaceholder}>Snapshots will load here...</p>
+              </div>
+            )}
           </div>
         ))}
         {disk.configs.length === 0 && (
