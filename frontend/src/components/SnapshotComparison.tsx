@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { loadConfigs, syncSnapshots } from '../utils/snapshotApi';
+import { loadConfigs, syncSnapshots, loadSnapshots } from '../utils/snapshotApi';
 import styles from './SnapshotComparison.module.css';
 
 interface SnapperConfig {
@@ -60,6 +60,7 @@ export const SnapshotComparison: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedConfigs, setExpandedConfigs] = useState<Set<string>>(new Set());
+  const [loadedSnapshots, setLoadedSnapshots] = useState<Record<string, any[]>>({});
   const [showSettings, setShowSettings] = useState(false);
 
   const saveSettings = (newSettings: AppSettings) => {
@@ -112,12 +113,28 @@ export const SnapshotComparison: React.FC = () => {
     setSelectedConfigs(newSelected);
   };
 
-  const toggleExpanded = (configName: string) => {
+  const toggleExpanded = async (configName: string) => {
     const newExpanded = new Set(expandedConfigs);
     if (newExpanded.has(configName)) {
       newExpanded.delete(configName);
     } else {
       newExpanded.add(configName);
+      // Fetch snapshots if not already loaded
+      if (!loadedSnapshots[configName]) {
+        try {
+          setLoading(true);
+          const snapshots = await loadSnapshots(configName);
+          setLoadedSnapshots(prev => ({
+            ...prev,
+            [configName]: snapshots,
+          }));
+        } catch (err) {
+          console.error(`Failed to load snapshots for ${configName}:`, err);
+          setError(`Failed to load snapshots for ${configName}`);
+        } finally {
+          setLoading(false);
+        }
+      }
     }
     setExpandedConfigs(newExpanded);
   };
@@ -189,6 +206,7 @@ export const SnapshotComparison: React.FC = () => {
           onToggleConfig={toggleConfig}
           expandedConfigs={expandedConfigs}
           onToggleExpanded={toggleExpanded}
+          loadedSnapshots={loadedSnapshots}
         />
 
         <div className={styles.center}>
@@ -216,6 +234,7 @@ export const SnapshotComparison: React.FC = () => {
           onToggleConfig={toggleConfig}
           expandedConfigs={expandedConfigs}
           onToggleExpanded={toggleExpanded}
+          loadedSnapshots={loadedSnapshots}
         />
       </div>
 
@@ -232,6 +251,7 @@ interface DiskPanelProps {
   onToggleConfig: (name: string) => void;
   expandedConfigs: Set<string>;
   onToggleExpanded: (name: string) => void;
+  loadedSnapshots: Record<string, any[]>;
 }
 
 const DiskPanel: React.FC<DiskPanelProps> = ({
@@ -240,6 +260,7 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
   onToggleConfig,
   expandedConfigs,
   onToggleExpanded,
+  loadedSnapshots,
 }) => {
   const icon = disk.type === 'local' ? '💾' : '💿';
 
@@ -276,7 +297,21 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
             </div>
             {expandedConfigs.has(cfg.name) && (
               <div className={styles.snapshotList}>
-                <p className={styles.snapshotPlaceholder}>Snapshots will load here...</p>
+                {loadedSnapshots[cfg.name] ? (
+                  loadedSnapshots[cfg.name].length > 0 ? (
+                    <ul className={styles.snapshotItems}>
+                      {loadedSnapshots[cfg.name].map((snap: any) => (
+                        <li key={snap.id} className={styles.snapshotItem}>
+                          📸 {snap.id}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className={styles.snapshotPlaceholder}>No snapshots found</p>
+                  )
+                ) : (
+                  <p className={styles.snapshotPlaceholder}>Loading snapshots...</p>
+                )}
               </div>
             )}
           </div>

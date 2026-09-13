@@ -43,3 +43,22 @@ export async function syncSnapshots(
     throw new Error('Sync failed');
   }
 }
+
+/**
+ * Fetch snapshots for a specific config
+ * @param configName - Config name (e.g., "root", "home")
+ * @returns Promise resolving to array of snapshot objects
+ */
+export async function loadSnapshots(configName: string) {
+  try {
+    const response = await fetch(`http://localhost:3001/api/snapshots`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch snapshots: ${response.statusText}`);
+    }
+    const data = await response.json();
+    return data.configs[configName] || [];
+  } catch (error) {
+    console.error('Error loading snapshots:', error);
+    throw error;
+  }
+}
