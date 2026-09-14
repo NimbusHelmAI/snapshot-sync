@@ -365,6 +365,21 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                 )}
               </div>
             )}
+            {expandedConfigs.has(cfg.name) && selectedSnapshots.size > 0 && (
+              <div className={styles.selectedSnapshotInfo}>
+                <p className={styles.selectedLabel}>Selected Snapshots:</p>
+                {Array.from(selectedSnapshots).filter(key => key.startsWith(cfg.name)).map(snapKey => (
+                  <div key={snapKey} className={styles.selectedSnapshot}>
+                    <span className={styles.snapshotId}>📸 {snapKey.split(':')[1]}</span>
+                    <div className={styles.actionButtons}>
+                      <button className={styles.actionBtn}>Compare</button>
+                      <button className={styles.actionBtn}>Browse</button>
+                      <button className={styles.actionBtn}>Restore</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
         {disk.configs.length === 0 && (
