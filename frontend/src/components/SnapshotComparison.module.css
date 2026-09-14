@@ -282,3 +282,14 @@
   background-color: #f0f4f8;
   border-color: #3498db;
 }
+
+.snapshotItemSelected {
+  background-color: #3498db;
+  color: #fff;
+  border-color: #2980b9;
+  font-weight: 500;
+}
+
+.snapshotItemSelected:hover {
+  background-color: #2980b9;
+}

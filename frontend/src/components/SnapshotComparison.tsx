@@ -61,6 +61,9 @@ export const SnapshotComparison: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [expandedConfigs, setExpandedConfigs] = useState<Set<string>>(new Set());
   const [loadedSnapshots, setLoadedSnapshots] = useState<Record<string, any[]>>({});
+  const [selectedSnapshots, setSelectedSnapshots] = useState<Set<string>>(new Set());
+  const [selectedConfigLeft, setSelectedConfigLeft] = useState<string | null>(null);
+  const [selectedConfigRight, setSelectedConfigRight] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
   const saveSettings = (newSettings: AppSettings) => {
@@ -113,12 +116,22 @@ export const SnapshotComparison: React.FC = () => {
     setSelectedConfigs(newSelected);
   };
 
-  const toggleExpanded = async (configName: string) => {
+  const toggleExpanded = async (configName: string, diskSide: 'left' | 'right') => {
     const newExpanded = new Set(expandedConfigs);
     if (newExpanded.has(configName)) {
       newExpanded.delete(configName);
     } else {
       newExpanded.add(configName);
+      // Set as selected config for this side
+      if (diskSide === 'left') {
+        setSelectedConfigLeft(configName);
+        // Auto-mirror to right if not already selected
+        if (!selectedConfigRight) {
+          setSelectedConfigRight(configName);
+        }
+      } else {
+        setSelectedConfigRight(configName);
+      }
       // Fetch snapshots if not already loaded
       if (!loadedSnapshots[configName]) {
         try {
@@ -137,6 +150,17 @@ export const SnapshotComparison: React.FC = () => {
       }
     }
     setExpandedConfigs(newExpanded);
+  };
+
+  const toggleSnapshot = (configName: string, snapshotId: string) => {
+    const key = `${configName}:${snapshotId}`;
+    const newSelected = new Set(selectedSnapshots);
+    if (newSelected.has(key)) {
+      newSelected.delete(key);
+    } else {
+      newSelected.add(key);
+    }
+    setSelectedSnapshots(newSelected);
   };
 
   const handleSync = async (direction: 'leftToRight' | 'rightToLeft') => {
@@ -202,11 +226,16 @@ export const SnapshotComparison: React.FC = () => {
       <div className={styles.splitView}>
         <DiskPanel
           disk={left}
+          diskSide="left"
           selectedConfigs={selectedConfigs}
           onToggleConfig={toggleConfig}
           expandedConfigs={expandedConfigs}
           onToggleExpanded={toggleExpanded}
           loadedSnapshots={loadedSnapshots}
+          selectedSnapshots={selectedSnapshots}
+          onToggleSnapshot={toggleSnapshot}
+          selectedConfig={selectedConfigLeft}
+          onConfigSelect={setSelectedConfigLeft}
         />
 
         <div className={styles.center}>
@@ -230,11 +259,16 @@ export const SnapshotComparison: React.FC = () => {
 
         <DiskPanel
           disk={right}
+          diskSide="right"
           selectedConfigs={selectedConfigs}
           onToggleConfig={toggleConfig}
           expandedConfigs={expandedConfigs}
           onToggleExpanded={toggleExpanded}
           loadedSnapshots={loadedSnapshots}
+          selectedSnapshots={selectedSnapshots}
+          onToggleSnapshot={toggleSnapshot}
+          selectedConfig={selectedConfigRight}
+          onConfigSelect={setSelectedConfigRight}
         />
       </div>
 
@@ -247,20 +281,29 @@ export const SnapshotComparison: React.FC = () => {
 
 interface DiskPanelProps {
   disk: DiskSide;
+  diskSide: 'left' | 'right';
   selectedConfigs: Set<string>;
   onToggleConfig: (name: string) => void;
   expandedConfigs: Set<string>;
-  onToggleExpanded: (name: string) => void;
+  onToggleExpanded: (configName: string, diskSide: 'left' | 'right') => Promise<void>;
   loadedSnapshots: Record<string, any[]>;
+  selectedSnapshots: Set<string>;
+  onToggleSnapshot: (configName: string, snapshotId: string) => void;
+  selectedConfig: string | null;
+  onConfigSelect: (configName: string) => void;
 }
 
 const DiskPanel: React.FC<DiskPanelProps> = ({
   disk,
+  diskSide,
   selectedConfigs,
   onToggleConfig,
   expandedConfigs,
   onToggleExpanded,
   loadedSnapshots,
+  selectedSnapshots,
+  onToggleSnapshot,
+  // selectedConfig and onConfigSelect - TODO: implement config override UI
 }) => {
   const icon = disk.type === 'local' ? '💾' : '💿';
 
@@ -289,7 +332,7 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
               </div>
               <button
                 className={styles.expandButton}
-                onClick={() => onToggleExpanded(cfg.name)}
+                onClick={() => onToggleExpanded(cfg.name, diskSide)}
                 title={expandedConfigs.has(cfg.name) ? 'Collapse' : 'Expand'}
               >
                 {expandedConfigs.has(cfg.name) ? '▼' : '▶'}
@@ -300,11 +343,19 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                 {loadedSnapshots[cfg.name] ? (
                   loadedSnapshots[cfg.name].length > 0 ? (
                     <ul className={styles.snapshotItems}>
-                      {loadedSnapshots[cfg.name].map((snap: any) => (
-                        <li key={snap.id} className={styles.snapshotItem}>
-                          📸 {snap.id}
-                        </li>
-                      ))}
+                      {loadedSnapshots[cfg.name].map((snap: any) => {
+                        const snapKey = `${cfg.name}:${snap.id}`;
+                        const isSelected = selectedSnapshots.has(snapKey);
+                        return (
+                          <li
+                            key={snap.id}
+                            className={`${styles.snapshotItem} ${isSelected ? styles.snapshotItemSelected : ''}`}
+                            onClick={() => onToggleSnapshot(cfg.name, snap.id)}
+                          >
+                            📸 {snap.id}
+                          </li>
+                        );
+                      })}
                     </ul>
                   ) : (
                     <p className={styles.snapshotPlaceholder}>No snapshots found</p>
