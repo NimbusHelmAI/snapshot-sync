@@ -18,12 +18,22 @@ app.get('/api/health', (req: Request, res: Response) => {
 // List snapshots - only root and home for now
 app.get('/api/snapshots', (req: Request, res: Response) => {
   try {
+    const queryPath = req.query.path as string || BACKUP_DISK;
     const configs: Record<string, any[]> = {};
-    // Temporarily disabled 'src' until sync script is fixed
     const validConfigs = ['root', 'home', 'src'];
     
     validConfigs.forEach(config => {
-      const configPath = path.join(BACKUP_DISK, config);
+      let configPath: string;
+      
+      // Determine snapshot path based on query
+      if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
+        // Backup: /run/media/amitp/Backup/{config}/
+        configPath = path.join(queryPath, config);
+      } else {
+        // Local: /{config}/.snapshots/
+        configPath = path.join('/', config, '.snapshots');
+      }
+      
       if (!fs.existsSync(configPath)) {
         return;
       }
@@ -36,11 +46,7 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
         try {
           const stat = fs.statSync(entryPath);
           if (stat.isDirectory() && /^\d+$/.test(entry)) {
-            // Only include if .info.xml exists (valid snapshot)
-            const infoXmlPath = path.join(configPath, `${entry}.info.xml`);
-            if (fs.existsSync(infoXmlPath)) {
-              snapshots.push({ id: entry });
-            }
+            snapshots.push({ id: entry });
           }
         } catch (e) {}
       });
@@ -50,7 +56,7 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
       }
     });
     
-    res.json({ backup_disk: BACKUP_DISK, configs });
+    res.json({ path: queryPath, configs });
   } catch (error) {
     const err = error as Error;
     console.error('Error in /api/snapshots:', err);
