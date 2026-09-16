@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import fs, { existsSync, readdirSync } from 'fs';
+import { execSync } from 'child_process';
 import path, { join } from 'path';
 import cors from 'cors';
 
@@ -30,22 +31,45 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
         // Backup: /run/media/amitp/Backup/{config}/
         configPath = path.join(queryPath, config);
       } else {
-        // Local: /{config}/.snapshots/
-        configPath = path.join('/', config, '.snapshots');
-      }
-      
-      if (!fs.existsSync(configPath)) {
-        return;
+        // Local paths
+        if (config === 'root') {
+          configPath = '/.snapshots';
+        } else if (config === 'src') {
+          configPath = '/home/amitp/src/.snapshots';
+        } else {
+          configPath = path.join('/', config, '.snapshots');
+        }
       }
       
       const snapshots: any[] = [];
-      const entries = fs.readdirSync(configPath);
+      let entries: string[] = [];
+      
+      try {
+        if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
+          // Backup path: normal read
+          if (!fs.existsSync(configPath)) return;
+          entries = fs.readdirSync(configPath);
+        } else {
+          // Local path: always use sudo
+          const output = execSync(`sudo ls "${configPath}"`, { encoding: 'utf8' });
+          entries = output.trim().split('\n').filter(e => e.length > 0);
+        }
+      } catch (e) {
+        return;
+      }
       
       entries.forEach(entry => {
-        const entryPath = path.join(configPath, entry);
+        if (!/^\d+$/.test(entry)) return; // Skip non-numeric
+        
         try {
-          const stat = fs.statSync(entryPath);
-          if (stat.isDirectory() && /^\d+$/.test(entry)) {
+          if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
+            // Backup: normal stat
+            const stat = fs.statSync(path.join(configPath, entry));
+            if (stat.isDirectory()) {
+              snapshots.push({ id: entry });
+            }
+          } else {
+            // Local: assume numeric entries are directories (from sudo ls output)
             snapshots.push({ id: entry });
           }
         } catch (e) {}
@@ -101,25 +125,56 @@ app.get('/api/snapshots/:config/:id', (req: Request, res: Response) => {
 app.get('/api/snapshots/:config/:id/browse', (req: Request, res: Response) => {
   try {
     const { config, id } = req.params as { config: string; id: string };
-    const subPath = req.query.path as string || '';
-    const basePath = path.join(BACKUP_DISK, config, id);
+    const queryPath = (req.query.path as string) || BACKUP_DISK;
+    const subPath = req.query.subPath as string || '';
+    
+    let basePath: string;
+    if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
+      basePath = path.join(queryPath, config, id);
+    } else {
+      // Local paths
+      if (config === 'root') {
+        basePath = path.join('/.snapshots', id);
+      } else if (config === 'src') {
+        basePath = path.join('/home/amitp/src/.snapshots', id);
+      } else {
+        basePath = path.join('/', config, '.snapshots', id);
+      }
+    }
     const targetPath = subPath ? path.join(basePath, subPath) : basePath;
     
     if (!targetPath.startsWith(basePath)) {
       return res.status(403).json({ error: 'Access denied' });
     }
     
-    if (!fs.existsSync(targetPath)) {
+    const items: any[] = [];
+    let files: string[] = [];
+    
+    try {
+      if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
+        if (!fs.existsSync(targetPath)) {
+          return res.status(404).json({ error: 'Path not found' });
+        }
+        files = fs.readdirSync(targetPath);
+      } else {
+        // Local path: use sudo
+        const output = execSync(`sudo ls -A "${targetPath}"`, { encoding: 'utf8' });
+        files = output.trim().split('\n').filter(f => f.length > 0);
+      }
+    } catch (e) {
       return res.status(404).json({ error: 'Path not found' });
     }
-    
-    const items: any[] = [];
-    const files = fs.readdirSync(targetPath);
     
     for (const file of files) {
       try {
         const fullPath = path.join(targetPath, file);
-        const stat = fs.statSync(fullPath);
+        let stat;
+        if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
+          stat = fs.statSync(fullPath);
+        } else {
+          // Local: assume directories from sudo ls
+          stat = { isDirectory: () => true, size: 0, mtime: new Date(), mode: 0o755 };
+        }
         items.push({
           name: file,
           type: stat.isDirectory() ? 'directory' : 'file',

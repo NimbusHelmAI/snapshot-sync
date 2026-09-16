@@ -49,9 +49,13 @@ export async function syncSnapshots(
  * @param configName - Config name (e.g., "root", "home")
  * @returns Promise resolving to array of snapshot objects
  */
-export async function loadSnapshots(configName: string) {
+export async function loadSnapshots(configName: string, path?: string) {
   try {
-    const response = await fetch(`http://localhost:3001/api/snapshots`);
+    const queryPath = path ? encodeURIComponent(path) : '';
+    const url = queryPath 
+      ? `http://localhost:3001/api/snapshots?path=${queryPath}`
+      : `http://localhost:3001/api/snapshots`;
+    const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`Failed to fetch snapshots: ${response.statusText}`);
     }

@@ -65,6 +65,8 @@ export const SnapshotComparison: React.FC = () => {
   const [selectedConfigLeft, setSelectedConfigLeft] = useState<string | null>(null);
   const [selectedConfigRight, setSelectedConfigRight] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [browseContents, setBrowseContents] = useState<any[] | null>(null);
+  const [selectedAction, setSelectedAction] = useState<{ config: string; snapshotId: string; action: 'browse' | 'compare' | 'restore' } | null>(null);
 
   const saveSettings = (newSettings: AppSettings) => {
     setSettings(newSettings);
@@ -117,6 +119,7 @@ export const SnapshotComparison: React.FC = () => {
   };
 
   const toggleExpanded = async (configName: string, diskSide: 'left' | 'right') => {
+    console.log(`[toggleExpanded] config=${configName}, side=${diskSide}`);
     const newExpanded = new Set(expandedConfigs);
     if (newExpanded.has(configName)) {
       newExpanded.delete(configName);
@@ -136,7 +139,10 @@ export const SnapshotComparison: React.FC = () => {
       if (!loadedSnapshots[configName]) {
         try {
           setLoading(true);
-          const snapshots = await loadSnapshots(configName);
+          const path = diskSide === 'left' ? '/' : '/run/media/amitp/Backup';
+          console.log(`[loadSnapshots] calling for config=${configName}, path=${path}`);
+          const snapshots = await loadSnapshots(configName, path);
+          console.log(`[loadSnapshots] got ${snapshots?.length || 0} snapshots`);
           setLoadedSnapshots(prev => ({
             ...prev,
             [configName]: snapshots,
@@ -191,6 +197,33 @@ export const SnapshotComparison: React.FC = () => {
     }
   };
 
+  const handleBrowse = async (config: string, snapshotId: string) => {
+    console.log(`[handleBrowse] config=${config}, id=${snapshotId}`);
+    try {
+      const path = selectedConfigLeft === config ? '/' : '/run/media/amitp/Backup';
+      const url = `http://localhost:3001/api/snapshots/${config}/${snapshotId}/browse?path=${encodeURIComponent(path)}`;
+      console.log(`[handleBrowse] fetching from ${url}`);
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Browse failed: ${response.statusText}`);
+      const data = await response.json();
+      console.log(`[handleBrowse] got ${data?.items?.length || 0} items`);
+      setBrowseContents(data.items || []);
+      setSelectedAction({ config, snapshotId, action: 'browse' });
+    } catch (err) {
+      console.error('[handleBrowse] error:', err);
+      setError(err instanceof Error ? err.message : 'Browse failed');
+    }
+  };
+
+  const handleCompare = (config: string, snapshotId: string) => {
+    console.log(`[handleCompare] config=${config}, id=${snapshotId}`);
+    setSelectedAction({ config, snapshotId, action: 'compare' });
+  };
+
+  const handleRestore = (config: string, snapshotId: string) => {
+    console.log(`[handleRestore] config=${config}, id=${snapshotId}`);
+    setSelectedAction({ config, snapshotId, action: 'restore' });
+  };
 
   return (
     <div className={styles.container}>
@@ -236,6 +269,9 @@ export const SnapshotComparison: React.FC = () => {
           onToggleSnapshot={toggleSnapshot}
           selectedConfig={selectedConfigLeft}
           onConfigSelect={setSelectedConfigLeft}
+          onBrowse={handleBrowse}
+          onCompare={handleCompare}
+          onRestore={handleRestore}
         />
 
         <div className={styles.center}>
@@ -269,6 +305,9 @@ export const SnapshotComparison: React.FC = () => {
           onToggleSnapshot={toggleSnapshot}
           selectedConfig={selectedConfigRight}
           onConfigSelect={setSelectedConfigRight}
+          onBrowse={handleBrowse}
+          onCompare={handleCompare}
+          onRestore={handleRestore}
         />
       </div>
 
@@ -291,6 +330,9 @@ interface DiskPanelProps {
   onToggleSnapshot: (configName: string, snapshotId: string) => void;
   selectedConfig: string | null;
   onConfigSelect: (configName: string) => void;
+  onBrowse: (config: string, snapshotId: string) => Promise<void>;
+  onCompare: (config: string, snapshotId: string) => void;
+  onRestore: (config: string, snapshotId: string) => void;
 }
 
 const DiskPanel: React.FC<DiskPanelProps> = ({
@@ -303,6 +345,9 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
   loadedSnapshots,
   selectedSnapshots,
   onToggleSnapshot,
+  onBrowse,
+  onCompare,
+  onRestore,
   // selectedConfig and onConfigSelect - TODO: implement config override UI
 }) => {
   const icon = disk.type === 'local' ? '💾' : '💿';
@@ -372,9 +417,9 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                   <div key={snapKey} className={styles.selectedSnapshot}>
                     <span className={styles.snapshotId}>📸 {snapKey.split(':')[1]}</span>
                     <div className={styles.actionButtons}>
-                      <button className={styles.actionBtn}>Compare</button>
-                      <button className={styles.actionBtn}>Browse</button>
-                      <button className={styles.actionBtn}>Restore</button>
+                      <button className={styles.actionBtn} onClick={() => onCompare(cfg.name, snapKey.split(':')[1])}>Compare</button>
+                      <button className={styles.actionBtn} onClick={() => onBrowse(cfg.name, snapKey.split(':')[1])}>Browse</button>
+                      <button className={styles.actionBtn} onClick={() => onRestore(cfg.name, snapKey.split(':')[1])}>Restore</button>
                     </div>
                   </div>
                 ))}
