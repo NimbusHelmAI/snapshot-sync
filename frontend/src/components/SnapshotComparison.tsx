@@ -66,7 +66,6 @@ export const SnapshotComparison: React.FC = () => {
   const [selectedConfigRight, setSelectedConfigRight] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [browseContents, setBrowseContents] = useState<any[] | null>(null);
-  const [selectedAction, setSelectedAction] = useState<{ config: string; snapshotId: string; action: 'browse' | 'compare' | 'restore' } | null>(null);
 
   const saveSettings = (newSettings: AppSettings) => {
     setSettings(newSettings);
@@ -208,7 +207,8 @@ export const SnapshotComparison: React.FC = () => {
       const data = await response.json();
       console.log(`[handleBrowse] got ${data?.items?.length || 0} items`);
       setBrowseContents(data.items || []);
-      setSelectedAction({ config, snapshotId, action: 'browse' });
+      console.log(`[handleBrowse] setBrowseContents called with ${data.items?.length || 0} items`);
+
     } catch (err) {
       console.error('[handleBrowse] error:', err);
       setError(err instanceof Error ? err.message : 'Browse failed');
@@ -217,12 +217,12 @@ export const SnapshotComparison: React.FC = () => {
 
   const handleCompare = (config: string, snapshotId: string) => {
     console.log(`[handleCompare] config=${config}, id=${snapshotId}`);
-    setSelectedAction({ config, snapshotId, action: 'compare' });
+
   };
 
   const handleRestore = (config: string, snapshotId: string) => {
     console.log(`[handleRestore] config=${config}, id=${snapshotId}`);
-    setSelectedAction({ config, snapshotId, action: 'restore' });
+
   };
 
   return (
@@ -255,6 +255,25 @@ export const SnapshotComparison: React.FC = () => {
       )}
 
       {error && <div className={styles.error}>{error}</div>}
+
+      {browseContents && (
+        <div className={styles.modal}>
+          <div className={styles.modalContent}>
+            <div className={styles.modalHeader}>
+              <h2>📂 Browse Snapshot</h2>
+              <button onClick={() => setBrowseContents(null)}>✕</button>
+            </div>
+            <div className={styles.browseItems}>
+              {browseContents.map((item: any) => (
+                <div key={item.name} className={styles.browseItem}>
+                  <span>{item.type === 'directory' ? '📁' : '📄'} {item.name}</span>
+                  <small>{item.type}</small>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className={styles.splitView}>
         <DiskPanel
