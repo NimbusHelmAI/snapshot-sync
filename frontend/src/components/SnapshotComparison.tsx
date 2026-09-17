@@ -416,7 +416,10 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                             className={`${styles.snapshotItem} ${isSelected ? styles.snapshotItemSelected : ''}`}
                             onClick={() => onToggleSnapshot(cfg.name, snap.id)}
                           >
-                            📸 {snap.id}
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                              <span>📸 {snap.id}</span>
+                              <small style={{ fontSize: '0.75em', opacity: 1, color: '#666' }}>{snap.date || 'unknown'}</small>
+                            </div>
                           </li>
                         );
                       })}

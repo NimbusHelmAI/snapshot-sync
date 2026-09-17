@@ -62,15 +62,28 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
         if (!/^\d+$/.test(entry)) return; // Skip non-numeric
         
         try {
+          const snapshotPath = path.join(configPath, entry);
+          const infoXmlPath = path.join(snapshotPath, 'info.xml');
+          let date = 'unknown';
+          
+          try {
+            let xmlContent = '';
+            if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
+              xmlContent = fs.readFileSync(infoXmlPath, 'utf8');
+            } else {
+              xmlContent = execSync(`sudo cat "${infoXmlPath}"`, { encoding: 'utf8' });
+            }
+            const dateMatch = xmlContent.match(/<date>([^<]+)<\/date>/);
+            if (dateMatch) date = dateMatch[1].split('T')[0];
+          } catch (e) {}
+          
           if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
-            // Backup: normal stat
-            const stat = fs.statSync(path.join(configPath, entry));
+            const stat = fs.statSync(snapshotPath);
             if (stat.isDirectory()) {
-              snapshots.push({ id: entry });
+              snapshots.push({ id: entry, date });
             }
           } else {
-            // Local: assume numeric entries are directories (from sudo ls output)
-            snapshots.push({ id: entry });
+            snapshots.push({ id: entry, date });
           }
         } catch (e) {}
       });
