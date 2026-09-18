@@ -1,6 +1,23 @@
-import { SnapperConfig, BrowseResponse, BrowseTarget, FilePreview } from '../types';
+import {
+  SnapperConfig,
+  Snapshot,
+  BrowseResponse,
+  BrowseTarget,
+  FilePreview,
+} from '../types';
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || '';
+
+/**
+ * Throws when a response is not ok, preferring the API's own `{ error }`
+ * message over the bare status text.
+ */
+async function throwIfNotOk(response: Response, fallback: string): Promise<void> {
+  if (response.ok) return;
+
+  const detail = await response.json().catch(() => null);
+  throw new Error(detail?.error || `${fallback}: ${response.statusText}`);
+}
 
 /**
  * Loads snapshot configurations for a given path
@@ -62,11 +79,7 @@ export async function browseSnapshot(
       `/${encodeURIComponent(target.snapshotId)}/browse?${params}`
   );
 
-  if (!response.ok) {
-    // The API reports failures as { error }; fall back to the status text.
-    const detail = await response.json().catch(() => null);
-    throw new Error(detail?.error || `Browse failed: ${response.statusText}`);
-  }
+  await throwIfNotOk(response, 'Browse failed');
 
   const data = await response.json();
   return {
@@ -93,10 +106,7 @@ export async function previewFile(
       `/${encodeURIComponent(target.snapshotId)}/file?${params}`
   );
 
-  if (!response.ok) {
-    const detail = await response.json().catch(() => null);
-    throw new Error(detail?.error || `Could not read file: ${response.statusText}`);
-  }
+  await throwIfNotOk(response, 'Could not read file');
 
   return response.json();
 }
@@ -135,18 +145,21 @@ export function formatModified(modified: string): string {
  * @param configName - Config name (e.g., "root", "home")
  * @returns Promise resolving to array of snapshot objects
  */
-export async function loadSnapshots(configName: string, path?: string) {
+export async function loadSnapshots(
+  configName: string,
+  path?: string
+): Promise<Snapshot[]> {
   try {
-    const queryPath = path ? encodeURIComponent(path) : '';
-    const url = queryPath 
-      ? `http://localhost:3001/api/snapshots?path=${queryPath}`
-      : `http://localhost:3001/api/snapshots`;
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch snapshots: ${response.statusText}`);
-    }
+    // Relative to apiBaseUrl like every other call here, so the Vite proxy
+    // routes it. Hardcoding localhost broke this one call in Docker, where
+    // the proxy target is http://api:3001.
+    const query = path ? `?${new URLSearchParams({ path })}` : '';
+    const response = await fetch(`${apiBaseUrl}/api/snapshots${query}`);
+
+    await throwIfNotOk(response, 'Failed to fetch snapshots');
+
     const data = await response.json();
-    return data.configs[configName] || [];
+    return data.configs?.[configName] || [];
   } catch (error) {
     console.error('Error loading snapshots:', error);
     throw error;

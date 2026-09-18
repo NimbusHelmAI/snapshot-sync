@@ -15,6 +15,13 @@ export interface Panel {
   configs: SnapperConfig[];
 }
 
+/** One snapshot as listed by the snapshots API. */
+export interface Snapshot {
+  id: string;
+  /** "YYYY-MM-DD" from snapper's info.xml, or "unknown" when unavailable. */
+  date: string;
+}
+
 export type BrowseItemType = 'directory' | 'file' | 'symlink' | 'other';
 
 /** One entry in a browsed snapshot directory, as returned by the browse API. */

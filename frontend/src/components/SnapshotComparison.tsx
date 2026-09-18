@@ -352,6 +352,7 @@ export const SnapshotComparison: React.FC = () => {
                 className={styles.crumb}
                 onClick={() => handleBrowseCrumb(0)}
                 disabled={browsePath === ''}
+                aria-current={browsePath === '' ? 'page' : undefined}
               >
                 root
               </button>
@@ -365,6 +366,7 @@ export const SnapshotComparison: React.FC = () => {
                       className={styles.crumb}
                       onClick={() => handleBrowseCrumb(index + 1)}
                       disabled={index === segments.length - 1}
+                      aria-current={index === segments.length - 1 ? 'page' : undefined}
                     >
                       {segment}
                     </button>
