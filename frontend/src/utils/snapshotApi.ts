@@ -1,4 +1,4 @@
-import { SnapperConfig, BrowseResponse, BrowseTarget } from '../types';
+import { SnapperConfig, BrowseResponse, BrowseTarget, FilePreview } from '../types';
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || '';
 
@@ -74,6 +74,31 @@ export async function browseSnapshot(
     currentPath: data.currentPath || '',
     parentPath: data.parentPath ?? null,
   };
+}
+
+/**
+ * Reads one file inside a snapshot for preview. The backend decides whether
+ * the file is text, an image, or something it cannot display.
+ *
+ * @param subPath Path to the file, relative to the snapshot root.
+ */
+export async function previewFile(
+  target: BrowseTarget,
+  subPath: string
+): Promise<FilePreview> {
+  const params = new URLSearchParams({ path: target.diskPath, subPath });
+
+  const response = await fetch(
+    `${apiBaseUrl}/api/snapshots/${encodeURIComponent(target.config)}` +
+      `/${encodeURIComponent(target.snapshotId)}/file?${params}`
+  );
+
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error(detail?.error || `Could not read file: ${response.statusText}`);
+  }
+
+  return response.json();
 }
 
 const SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];

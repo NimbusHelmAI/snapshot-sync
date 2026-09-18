@@ -9,8 +9,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { loadConfigs, syncSnapshots, loadSnapshots } from '../utils/snapshotApi';
-import { browseSnapshot, formatSize, formatModified } from '../utils/snapshotApi';
-import type { BrowseItem, BrowseTarget } from '../types';
+import { browseSnapshot, previewFile, formatSize, formatModified } from '../utils/snapshotApi';
+import type { BrowseItem, BrowseTarget, FilePreview } from '../types';
 import styles from './SnapshotComparison.module.css';
 
 /** Leading glyph for each kind of directory entry in the browse modal. */
@@ -81,6 +81,11 @@ export const SnapshotComparison: React.FC = () => {
   const [browsePath, setBrowsePath] = useState('');
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
+
+  // File preview, layered over the browse list. Null means nothing is open.
+  const [preview, setPreview] = useState<FilePreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const saveSettings = (newSettings: AppSettings) => {
     setSettings(newSettings);
@@ -218,6 +223,7 @@ export const SnapshotComparison: React.FC = () => {
   const loadBrowsePath = async (target: BrowseTarget, subPath: string) => {
     setBrowseLoading(true);
     setBrowseError(null);
+    closePreview();
     try {
       const data = await browseSnapshot(target, subPath);
       setBrowseItems(data.items);
@@ -237,11 +243,39 @@ export const SnapshotComparison: React.FC = () => {
     await loadBrowsePath(target, '');
   };
 
-  /** Descends into a directory entry; files and unreadable types are inert. */
+  /**
+   * Directories are descended into; anything else is opened in the preview
+   * pane, which reports for itself when a file cannot be displayed.
+   */
   const handleBrowseEnter = (item: BrowseItem) => {
-    if (!browseTarget || item.type !== 'directory') return;
+    if (!browseTarget) return;
+
     const next = browsePath ? `${browsePath}/${item.name}` : item.name;
-    void loadBrowsePath(browseTarget, next);
+
+    if (item.type === 'directory') {
+      void loadBrowsePath(browseTarget, next);
+      return;
+    }
+    void openPreview(browseTarget, next);
+  };
+
+  const openPreview = async (target: BrowseTarget, subPath: string) => {
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreview(null);
+    try {
+      setPreview(await previewFile(target, subPath));
+    } catch (err) {
+      setPreviewError(err instanceof Error ? err.message : 'Could not read file');
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const closePreview = () => {
+    setPreview(null);
+    setPreviewError(null);
+    setPreviewLoading(false);
   };
 
   /** Jumps to a breadcrumb segment. `depth` of 0 is the snapshot root. */
@@ -257,6 +291,7 @@ export const SnapshotComparison: React.FC = () => {
     setBrowseItems([]);
     setBrowsePath('');
     setBrowseError(null);
+    closePreview();
   };
 
   const handleCompare = (config: string, snapshotId: string) => {
@@ -333,6 +368,48 @@ export const SnapshotComparison: React.FC = () => {
                 ))}
             </nav>
 
+            {(previewLoading || previewError || preview) && (
+              <div className={styles.preview}>
+                <div className={styles.previewHeader}>
+                  <strong className={styles.previewName}>
+                    {preview?.name ?? 'Preview'}
+                  </strong>
+                  <button onClick={closePreview} title="Close preview">✕</button>
+                </div>
+
+                <div className={styles.previewBody}>
+                  {previewLoading && <p className={styles.browseNotice}>Reading file…</p>}
+
+                  {!previewLoading && previewError && (
+                    <p className={styles.browseError}>{previewError}</p>
+                  )}
+
+                  {!previewLoading && preview?.kind === 'text' && (
+                    <>
+                      <pre className={styles.previewText}>{preview.content}</pre>
+                      {preview.truncated && (
+                        <p className={styles.browseNotice}>
+                          Showing the first 1 MB of {formatSize(preview.size)}.
+                        </p>
+                      )}
+                    </>
+                  )}
+
+                  {!previewLoading && preview?.kind === 'image' && (
+                    <img
+                      className={styles.previewImage}
+                      src={preview.dataUrl}
+                      alt={preview.name}
+                    />
+                  )}
+
+                  {!previewLoading && preview?.kind === 'unsupported' && (
+                    <p className={styles.browseNotice}>{preview.reason}</p>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div className={styles.browseItems}>
               {browseLoading && <p className={styles.browseNotice}>Loading…</p>}
 
@@ -355,10 +432,11 @@ export const SnapshotComparison: React.FC = () => {
                         isDirectory ? styles.browseItemDir : styles.browseItemFile
                       }`}
                       onClick={() => handleBrowseEnter(item)}
-                      role={isDirectory ? 'button' : undefined}
-                      tabIndex={isDirectory ? 0 : undefined}
+                      role="button"
+                      tabIndex={0}
+                      title={isDirectory ? 'Open folder' : 'Preview file'}
                       onKeyDown={(e) => {
-                        if (isDirectory && (e.key === 'Enter' || e.key === ' ')) {
+                        if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault();
                           handleBrowseEnter(item);
                         }

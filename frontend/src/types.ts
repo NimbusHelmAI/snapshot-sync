@@ -41,6 +41,12 @@ export interface BrowseResponse {
   parentPath: string | null;
 }
 
+/** Result of previewing a single file inside a snapshot. */
+export type FilePreview =
+  | { kind: 'text'; name: string; content: string; truncated: boolean; size: number }
+  | { kind: 'image'; name: string; mimeType: string; dataUrl: string; size: number }
+  | { kind: 'unsupported'; name: string; reason: string };
+
 /** Which snapshot the browse modal is currently showing. */
 export interface BrowseTarget {
   config: string;

@@ -308,6 +308,170 @@ app.get('/api/snapshots/:config/:id/browse', (req: Request, res: Response) => {
 });
 
 
+// ---------------------------------------------------------------------------
+// Read one file inside a snapshot, for preview
+// ---------------------------------------------------------------------------
+
+/** Text is capped lower than images: it all has to fit on screen anyway. */
+const MAX_TEXT_BYTES = 1024 * 1024; // 1 MB
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
+const READ_CAP = MAX_IMAGE_BYTES;
+
+/**
+ * Image formats recognised by magic bytes rather than by extension, so a
+ * mislabelled file is still classified correctly. SVG is deliberately absent:
+ * it is XML, so it is served down the text path instead of being handed to an
+ * <img> tag.
+ */
+const IMAGE_SIGNATURES: ReadonlyArray<{ mime: string; test: (b: Buffer) => boolean }> = [
+  { mime: 'image/png', test: (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+  { mime: 'image/jpeg', test: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { mime: 'image/gif', test: (b) => b.subarray(0, 6).toString('latin1') === 'GIF87a' || b.subarray(0, 6).toString('latin1') === 'GIF89a' },
+  { mime: 'image/webp', test: (b) => b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP' },
+  { mime: 'image/bmp', test: (b) => b[0] === 0x42 && b[1] === 0x4d },
+];
+
+function detectImageMime(buffer: Buffer): string | null {
+  if (buffer.length < 12) return null;
+  for (const sig of IMAGE_SIGNATURES) {
+    if (sig.test(buffer)) return sig.mime;
+  }
+  return null;
+}
+
+/**
+ * Treats a buffer as text if its first 8 KiB carry no NUL byte and decode as
+ * valid UTF-8. This catches source, config and log files regardless of
+ * extension, and rejects binaries without needing a format list.
+ */
+function looksLikeText(buffer: Buffer): boolean {
+  const sample = buffer.subarray(0, 8192);
+  if (sample.includes(0)) return false;
+
+  const decoded = new TextDecoder('utf-8', { fatal: false }).decode(sample);
+  return !decoded.includes('�');
+}
+
+function readFileCapped(targetPath: string, useSudo: boolean): Buffer {
+  if (useSudo) {
+    return execFileSync('sudo', ['cat', '--', targetPath], {
+      maxBuffer: READ_CAP + 1024,
+      timeout: 15_000,
+    });
+  }
+
+  // Readable directly: check the size before pulling it into memory, so a
+  // huge file is refused rather than buffered.
+  const stat = fs.statSync(targetPath);
+  if (stat.isDirectory()) {
+    const err: NodeJS.ErrnoException = new Error('Is a directory');
+    err.code = 'EISDIR';
+    throw err;
+  }
+  if (stat.size > READ_CAP) {
+    const err: NodeJS.ErrnoException = new Error('File exceeds preview limit');
+    err.code = 'ENOBUFS';
+    throw err;
+  }
+  return fs.readFileSync(targetPath);
+}
+
+app.get('/api/snapshots/:config/:id/file', (req: Request, res: Response) => {
+  const { config, id } = req.params as { config: string; id: string };
+
+  if (!SAFE_SEGMENT.test(config) || !SAFE_SEGMENT.test(id)) {
+    return res.status(400).json({ error: 'Invalid config or snapshot id' });
+  }
+
+  const queryPath = (req.query.path as string) || BACKUP_DISK;
+  const subPath = (req.query.subPath as string) || '';
+
+  if (!subPath) {
+    return res.status(400).json({ error: 'subPath is required' });
+  }
+
+  const basePath = snapshotBasePath(queryPath, config, id);
+  const targetPath = resolveSubPath(basePath, subPath);
+
+  if (targetPath === null) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  const name = path.posix.basename(subPath);
+
+  try {
+    const buffer = readFileCapped(targetPath, !isBackupPath(queryPath));
+
+    const imageMime = detectImageMime(buffer);
+    if (imageMime) {
+      if (buffer.length > MAX_IMAGE_BYTES) {
+        return res.json({
+          kind: 'unsupported',
+          name,
+          reason: `Image is ${formatBytes(buffer.length)}; preview is limited to ${formatBytes(MAX_IMAGE_BYTES)}.`,
+        });
+      }
+      return res.json({
+        kind: 'image',
+        name,
+        mimeType: imageMime,
+        dataUrl: `data:${imageMime};base64,${buffer.toString('base64')}`,
+        size: buffer.length,
+      });
+    }
+
+    if (looksLikeText(buffer)) {
+      const truncated = buffer.length > MAX_TEXT_BYTES;
+      return res.json({
+        kind: 'text',
+        name,
+        content: buffer.subarray(0, MAX_TEXT_BYTES).toString('utf8'),
+        truncated,
+        size: buffer.length,
+      });
+    }
+
+    return res.json({
+      kind: 'unsupported',
+      name,
+      reason: 'This file is not text or a supported image format, so it cannot be displayed.',
+    });
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException & { message: string };
+    console.error(`File read failed for ${targetPath}:`, err.message);
+
+    if (err.code === 'ENOBUFS' || /maxBuffer/i.test(err.message)) {
+      return res.json({
+        kind: 'unsupported',
+        name,
+        reason: `File is larger than the ${formatBytes(READ_CAP)} preview limit.`,
+      });
+    }
+    if (/No such file or directory/i.test(err.message) || err.code === 'ENOENT') {
+      return res.status(404).json({ error: 'File not found' });
+    }
+    if (/Permission denied|not allowed|a password is required/i.test(err.message) || err.code === 'EACCES') {
+      return res.status(403).json({ error: 'Permission denied' });
+    }
+    if (/Is a directory/i.test(err.message) || err.code === 'EISDIR') {
+      return res.status(400).json({ error: 'Not a file' });
+    }
+    res.status(500).json({ error: 'Could not read file' });
+  }
+});
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
+
 
 
 
