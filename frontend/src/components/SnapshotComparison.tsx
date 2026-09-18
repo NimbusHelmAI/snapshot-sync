@@ -13,6 +13,10 @@ import { browseSnapshot, previewFile, formatSize, formatModified } from '../util
 import type { BrowseItem, BrowseTarget, FilePreview } from '../types';
 import styles from './SnapshotComparison.module.css';
 
+/** Shown on the controls that are deliberately inert until NHA-93 lands. */
+const SYNC_DISABLED_HINT =
+  'Not implemented yet — snapshot sync, compare and restore are tracked in NHA-93';
+
 /** Leading glyph for each kind of directory entry in the browse modal. */
 const ENTRY_ICON: Record<BrowseItem['type'], string> = {
   directory: '📁',
@@ -481,23 +485,30 @@ export const SnapshotComparison: React.FC = () => {
           onRestore={handleRestore}
         />
 
+        {/*
+          Sync is disabled until NHA-93. POST /api/sync does not exist yet, so
+          these buttons would post to a route the backend does not serve and
+          fail with a 404. Left visible so the layout is stable, but inert and
+          labelled, rather than shipping a control that silently does nothing.
+        */}
         <div className={styles.center}>
           <button
             className={styles.syncRightBtn}
-            disabled={selectedConfigs.size === 0 || loading}
+            disabled
             onClick={() => handleSync('leftToRight')}
-            title="Sync selected from left to right"
+            title={SYNC_DISABLED_HINT}
           >
-            {loading ? '⏳' : '→'}
+            →
           </button>
           <button
             className={styles.syncLeftBtn}
-            disabled={selectedConfigs.size === 0 || loading}
+            disabled
             onClick={() => handleSync('rightToLeft')}
-            title="Sync selected from right to left"
+            title={SYNC_DISABLED_HINT}
           >
-            {loading ? '⏳' : '←'}
+            ←
           </button>
+          <p className={styles.pendingNote}>Sync not yet implemented</p>
         </div>
 
         <DiskPanel
@@ -520,6 +531,7 @@ export const SnapshotComparison: React.FC = () => {
 
       <div className={styles.status}>
         <span>{selectedConfigs.size} config(s) selected</span>
+        {loading && <span>Refreshing…</span>}
       </div>
     </div>
   );
@@ -627,14 +639,29 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                   <div key={snapKey} className={styles.selectedSnapshot}>
                     <span className={styles.snapshotId}>📸 {snapKey.split(':')[1]}</span>
                     <div className={styles.actionButtons}>
-                      <button className={styles.actionBtn} onClick={() => onCompare(cfg.name, snapKey.split(':')[1])}>Compare</button>
+                      {/* Compare and Restore are stubs until NHA-93. */}
+                      <button
+                        className={styles.actionBtn}
+                        disabled
+                        title={SYNC_DISABLED_HINT}
+                        onClick={() => onCompare(cfg.name, snapKey.split(':')[1])}
+                      >
+                        Compare
+                      </button>
                       <button
                         className={styles.actionBtn}
                         onClick={() => onBrowse(cfg.name, snapKey.split(':')[1], disk.path)}
                       >
                         Browse
                       </button>
-                      <button className={styles.actionBtn} onClick={() => onRestore(cfg.name, snapKey.split(':')[1])}>Restore</button>
+                      <button
+                        className={styles.actionBtn}
+                        disabled
+                        title={SYNC_DISABLED_HINT}
+                        onClick={() => onRestore(cfg.name, snapKey.split(':')[1])}
+                      >
+                        Restore
+                      </button>
                     </div>
                   </div>
                 ))}

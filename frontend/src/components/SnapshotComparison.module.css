@@ -348,6 +348,16 @@
   justify-content: center;
 }
 
+/* Caption under the inert sync buttons, until NHA-93 implements them. */
+.pendingNote {
+  margin: 8px 0 0;
+  max-width: 96px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.3;
+  color: #858585;
+}
+
 /* --- Browse modal: path breadcrumb ------------------------------------- */
 
 .breadcrumb {
