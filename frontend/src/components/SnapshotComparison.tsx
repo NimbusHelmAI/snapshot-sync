@@ -9,7 +9,17 @@
 
 import React, { useState, useEffect } from 'react';
 import { loadConfigs, syncSnapshots, loadSnapshots } from '../utils/snapshotApi';
+import { browseSnapshot, formatSize, formatModified } from '../utils/snapshotApi';
+import type { BrowseItem, BrowseTarget } from '../types';
 import styles from './SnapshotComparison.module.css';
+
+/** Leading glyph for each kind of directory entry in the browse modal. */
+const ENTRY_ICON: Record<BrowseItem['type'], string> = {
+  directory: '📁',
+  file: '📄',
+  symlink: '🔗',
+  other: '⚙️',
+};
 
 interface SnapperConfig {
   name: string;
@@ -65,7 +75,12 @@ export const SnapshotComparison: React.FC = () => {
   const [selectedConfigLeft, setSelectedConfigLeft] = useState<string | null>(null);
   const [selectedConfigRight, setSelectedConfigRight] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [browseContents, setBrowseContents] = useState<any[] | null>(null);
+  // Browse modal. `browseTarget` non-null means the modal is open.
+  const [browseTarget, setBrowseTarget] = useState<BrowseTarget | null>(null);
+  const [browseItems, setBrowseItems] = useState<BrowseItem[]>([]);
+  const [browsePath, setBrowsePath] = useState('');
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const [browseError, setBrowseError] = useState<string | null>(null);
 
   const saveSettings = (newSettings: AppSettings) => {
     setSettings(newSettings);
@@ -196,23 +211,52 @@ export const SnapshotComparison: React.FC = () => {
     }
   };
 
-  const handleBrowse = async (config: string, snapshotId: string) => {
-    console.log(`[handleBrowse] config=${config}, id=${snapshotId}`);
+  /**
+   * Loads one directory of a snapshot into the browse modal.
+   * `subPath` is relative to the snapshot root; '' is the root itself.
+   */
+  const loadBrowsePath = async (target: BrowseTarget, subPath: string) => {
+    setBrowseLoading(true);
+    setBrowseError(null);
     try {
-      const path = selectedConfigLeft === config ? '/' : '/run/media/amitp/Backup';
-      const url = `http://localhost:3001/api/snapshots/${config}/${snapshotId}/browse?path=${encodeURIComponent(path)}`;
-      console.log(`[handleBrowse] fetching from ${url}`);
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Browse failed: ${response.statusText}`);
-      const data = await response.json();
-      console.log(`[handleBrowse] got ${data?.items?.length || 0} items`);
-      setBrowseContents(data.items || []);
-      console.log(`[handleBrowse] setBrowseContents called with ${data.items?.length || 0} items`);
-
+      const data = await browseSnapshot(target, subPath);
+      setBrowseItems(data.items);
+      setBrowsePath(data.currentPath);
     } catch (err) {
-      console.error('[handleBrowse] error:', err);
-      setError(err instanceof Error ? err.message : 'Browse failed');
+      setBrowseError(err instanceof Error ? err.message : 'Browse failed');
+      setBrowseItems([]);
+    } finally {
+      setBrowseLoading(false);
     }
+  };
+
+  const handleBrowse = async (config: string, snapshotId: string, diskPath: string) => {
+    const target: BrowseTarget = { config, snapshotId, diskPath };
+    setBrowseTarget(target);
+    setBrowsePath('');
+    await loadBrowsePath(target, '');
+  };
+
+  /** Descends into a directory entry; files and unreadable types are inert. */
+  const handleBrowseEnter = (item: BrowseItem) => {
+    if (!browseTarget || item.type !== 'directory') return;
+    const next = browsePath ? `${browsePath}/${item.name}` : item.name;
+    void loadBrowsePath(browseTarget, next);
+  };
+
+  /** Jumps to a breadcrumb segment. `depth` of 0 is the snapshot root. */
+  const handleBrowseCrumb = (depth: number) => {
+    if (!browseTarget) return;
+    const next = browsePath.split('/').filter(Boolean).slice(0, depth).join('/');
+    if (next === browsePath) return;
+    void loadBrowsePath(browseTarget, next);
+  };
+
+  const closeBrowse = () => {
+    setBrowseTarget(null);
+    setBrowseItems([]);
+    setBrowsePath('');
+    setBrowseError(null);
   };
 
   const handleCompare = (config: string, snapshotId: string) => {
@@ -256,20 +300,86 @@ export const SnapshotComparison: React.FC = () => {
 
       {error && <div className={styles.error}>{error}</div>}
 
-      {browseContents && (
-        <div className={styles.modal}>
-          <div className={styles.modalContent}>
+      {browseTarget && (
+        <div className={styles.modal} onClick={closeBrowse}>
+          <div className={styles.modalContent} onClick={(e) => e.stopPropagation()}>
             <div className={styles.modalHeader}>
-              <h2>📂 Browse Snapshot</h2>
-              <button onClick={() => setBrowseContents(null)}>✕</button>
+              <h2>📂 {browseTarget.config} · snapshot {browseTarget.snapshotId}</h2>
+              <button onClick={closeBrowse} title="Close">✕</button>
             </div>
+
+            <nav className={styles.breadcrumb} aria-label="Snapshot path">
+              <button
+                className={styles.crumb}
+                onClick={() => handleBrowseCrumb(0)}
+                disabled={browsePath === ''}
+              >
+                root
+              </button>
+              {browsePath
+                .split('/')
+                .filter(Boolean)
+                .map((segment, index, segments) => (
+                  <React.Fragment key={`${segment}-${index}`}>
+                    <span className={styles.crumbSep}>/</span>
+                    <button
+                      className={styles.crumb}
+                      onClick={() => handleBrowseCrumb(index + 1)}
+                      disabled={index === segments.length - 1}
+                    >
+                      {segment}
+                    </button>
+                  </React.Fragment>
+                ))}
+            </nav>
+
             <div className={styles.browseItems}>
-              {browseContents.map((item: any) => (
-                <div key={item.name} className={styles.browseItem}>
-                  <span>{item.type === 'directory' ? '📁' : '📄'} {item.name}</span>
-                  <small>{item.type}</small>
-                </div>
-              ))}
+              {browseLoading && <p className={styles.browseNotice}>Loading…</p>}
+
+              {!browseLoading && browseError && (
+                <p className={styles.browseError}>{browseError}</p>
+              )}
+
+              {!browseLoading && !browseError && browseItems.length === 0 && (
+                <p className={styles.browseNotice}>This directory is empty.</p>
+              )}
+
+              {!browseLoading &&
+                !browseError &&
+                browseItems.map((item) => {
+                  const isDirectory = item.type === 'directory';
+                  return (
+                    <div
+                      key={item.name}
+                      className={`${styles.browseItem} ${
+                        isDirectory ? styles.browseItemDir : styles.browseItemFile
+                      }`}
+                      onClick={() => handleBrowseEnter(item)}
+                      role={isDirectory ? 'button' : undefined}
+                      tabIndex={isDirectory ? 0 : undefined}
+                      onKeyDown={(e) => {
+                        if (isDirectory && (e.key === 'Enter' || e.key === ' ')) {
+                          e.preventDefault();
+                          handleBrowseEnter(item);
+                        }
+                      }}
+                    >
+                      <span className={styles.browseName}>
+                        {ENTRY_ICON[item.type]} {item.name}
+                        {item.target && (
+                          <span className={styles.symlinkTarget}> → {item.target}</span>
+                        )}
+                      </span>
+                      <span className={styles.browseMeta}>
+                        {item.owner}
+                        <span className={styles.metaSep}>|</span>
+                        {isDirectory ? '—' : formatSize(item.size)}
+                        <span className={styles.metaSep}>|</span>
+                        {formatModified(item.modified)}
+                      </span>
+                    </div>
+                  );
+                })}
             </div>
           </div>
         </div>
@@ -349,7 +459,7 @@ interface DiskPanelProps {
   onToggleSnapshot: (configName: string, snapshotId: string) => void;
   selectedConfig: string | null;
   onConfigSelect: (configName: string) => void;
-  onBrowse: (config: string, snapshotId: string) => Promise<void>;
+  onBrowse: (config: string, snapshotId: string, diskPath: string) => Promise<void>;
   onCompare: (config: string, snapshotId: string) => void;
   onRestore: (config: string, snapshotId: string) => void;
 }
@@ -440,7 +550,12 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                     <span className={styles.snapshotId}>📸 {snapKey.split(':')[1]}</span>
                     <div className={styles.actionButtons}>
                       <button className={styles.actionBtn} onClick={() => onCompare(cfg.name, snapKey.split(':')[1])}>Compare</button>
-                      <button className={styles.actionBtn} onClick={() => onBrowse(cfg.name, snapKey.split(':')[1])}>Browse</button>
+                      <button
+                        className={styles.actionBtn}
+                        onClick={() => onBrowse(cfg.name, snapKey.split(':')[1], disk.path)}
+                      >
+                        Browse
+                      </button>
                       <button className={styles.actionBtn} onClick={() => onRestore(cfg.name, snapKey.split(':')[1])}>Restore</button>
                     </div>
                   </div>

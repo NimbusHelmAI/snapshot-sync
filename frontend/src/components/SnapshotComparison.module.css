@@ -308,15 +308,13 @@
 }
 
 .modalContent {
-  width: 95%;
-  max-width: 900px;
-  max-height: 90vh;
+  width: 90%;
+  /* Wide enough for a long filename and the metadata column side by side. */
+  max-width: 800px;
+  max-height: 85vh;
   background: white;
   border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  width: 90%;
-  max-width: 600px;
-  max-height: 80vh;
   display: flex;
   flex-direction: column;
 }
@@ -330,7 +328,6 @@
 }
 
 .modalHeader h2 {
-  font-size: 24px;
   margin: 0;
   font-size: 18px;
 }
@@ -348,6 +345,48 @@
   justify-content: center;
 }
 
+/* --- Browse modal: path breadcrumb ------------------------------------- */
+
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #eee;
+  background: #fafafa;
+  font-size: 13px;
+}
+
+.crumb {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #2980b9;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.crumb:hover:not(:disabled) {
+  background: #eaf3fa;
+  text-decoration: underline;
+}
+
+/* The trailing segment is where we already are, so it is not a link. */
+.crumb:disabled {
+  color: #555;
+  cursor: default;
+  font-weight: 600;
+}
+
+.crumbSep {
+  color: #bbb;
+}
+
+/* --- Browse modal: entry list ------------------------------------------ */
+
 .browseItems {
   min-height: 400px;
   flex: 1;
@@ -356,27 +395,73 @@
 }
 
 .browseItem {
-  padding: 16px 20px;
-  font-size: 16px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #f0f0f0;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: baseline;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+/* Only directories go anywhere when clicked. */
+.browseItemDir {
   cursor: pointer;
 }
 
-.browseItem:hover {
-  background: #f9f9f9;
+.browseItemDir:hover,
+.browseItemDir:focus-visible {
+  background: #f4f8fb;
+  outline: none;
 }
 
-.browseItem span {
-  font-size: 16px;
-  font-size: 14px;
+.browseItemFile {
+  cursor: default;
 }
 
-.browseItem small {
+.browseName {
   font-size: 14px;
-  color: #999;
+  overflow-wrap: anywhere;
+}
+
+.browseItemDir .browseName {
+  color: #2980b9;
+  font-weight: 600;
+}
+
+.browseItemFile .browseName {
+  color: inherit;
+  font-weight: normal;
+}
+
+.symlinkTarget {
+  color: #888;
+  font-weight: normal;
+  font-style: italic;
+}
+
+/* owner | size | modified */
+.browseMeta {
+  flex-shrink: 0;
   font-size: 12px;
+  color: #777;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.metaSep {
+  margin: 0 6px;
+  color: #ccc;
+}
+
+.browseNotice,
+.browseError {
+  margin: 0;
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 14px;
+  color: #777;
+}
+
+.browseError {
+  color: #c0392b;
 }

@@ -1,4 +1,4 @@
-import { SnapperConfig } from '../types';
+import { SnapperConfig, BrowseResponse, BrowseTarget } from '../types';
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || '';
 
@@ -42,6 +42,67 @@ export async function syncSnapshots(
   if (!response.ok) {
     throw new Error('Sync failed');
   }
+}
+
+/**
+ * Lists one directory inside a snapshot.
+ *
+ * @param target  Which snapshot to read, and the disk it lives on.
+ * @param subPath Path relative to the snapshot root; '' is the root itself.
+ */
+export async function browseSnapshot(
+  target: BrowseTarget,
+  subPath: string
+): Promise<BrowseResponse> {
+  const params = new URLSearchParams({ path: target.diskPath });
+  if (subPath) params.set('subPath', subPath);
+
+  const response = await fetch(
+    `${apiBaseUrl}/api/snapshots/${encodeURIComponent(target.config)}` +
+      `/${encodeURIComponent(target.snapshotId)}/browse?${params}`
+  );
+
+  if (!response.ok) {
+    // The API reports failures as { error }; fall back to the status text.
+    const detail = await response.json().catch(() => null);
+    throw new Error(detail?.error || `Browse failed: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  return {
+    items: data.items || [],
+    currentPath: data.currentPath || '',
+    parentPath: data.parentPath ?? null,
+  };
+}
+
+const SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+
+/** Formats a byte count for display, e.g. 2411724 -> "2.3 MB". */
+export function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${SIZE_UNITS[unit]}`;
+}
+
+/** Formats an API timestamp as "YYYY-MM-DD HH:MM", or "—" if unparseable. */
+export function formatModified(modified: string): string {
+  if (!modified) return '—';
+  const parsed = new Date(modified);
+  if (Number.isNaN(parsed.getTime())) return '—';
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} ` +
+    `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`
+  );
 }
 
 /**
