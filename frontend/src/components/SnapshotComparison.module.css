@@ -222,3 +222,317 @@
   border-top: 1px solid #ddd;
   font-size: 0.9rem;
 }
+
+/* Expand/Collapse button */
+.expandButton {
+  background: none;
+  border: none;
+  color: #7f8c8d;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.expandButton:hover {
+  background-color: #ecf0f1;
+  color: #2c3e50;
+}
+
+/* Snapshot list container */
+.snapshotList {
+  padding: 12px 16px;
+  margin-top: 4px;
+  background-color: #f8f9fa;
+  border-radius: 6px;
+  border-left: 3px solid #3498db;
+}
+
+.snapshotPlaceholder {
+  margin: 0;
+  color: #95a5a6;
+  font-size: 13px;
+  font-style: italic;
+}
+
+.snapshotItems {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.snapshotItem {
+  padding: 8px 12px;
+  margin: 4px 0;
+  background-color: #fff;
+  border: 1px solid #e0e6ed;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.snapshotItem:hover {
+  background-color: #f0f4f8;
+  border-color: #3498db;
+}
+
+.snapshotItemSelected {
+  background-color: #3498db;
+  color: #fff;
+  border-color: #2980b9;
+  font-weight: 500;
+}
+
+.snapshotItemSelected:hover {
+  background-color: #2980b9;
+}
+
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modalContent {
+  width: 90%;
+  /* Wide enough for a long filename and the metadata column side by side. */
+  max-width: 800px;
+  max-height: 85vh;
+  background: white;
+  /* body sets a light grey for the dark app shell; this panel is white, so it
+     needs its own dark text colour or everything inside inherits unreadable. */
+  color: #1f2328;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+}
+
+.modalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid #eee;
+}
+
+.modalHeader h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.modalHeader button {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Caption under the inert sync buttons, until NHA-93 implements them. */
+.pendingNote {
+  margin: 8px 0 0;
+  max-width: 96px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.3;
+  color: #858585;
+}
+
+/* --- Browse modal: path breadcrumb ------------------------------------- */
+
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #eee;
+  background: #fafafa;
+  font-size: 13px;
+}
+
+.crumb {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #2980b9;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.crumb:hover:not(:disabled) {
+  background: #eaf3fa;
+  text-decoration: underline;
+}
+
+/* The trailing segment is where we already are, so it is not a link. */
+.crumb:disabled {
+  color: #555;
+  cursor: default;
+  font-weight: 600;
+}
+
+.crumbSep {
+  color: #bbb;
+}
+
+/* --- Browse modal: entry list ------------------------------------------ */
+
+.browseItems {
+  min-height: 400px;
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+
+.browseItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  /* Folders navigate; files open a preview. Both are clickable. */
+  cursor: pointer;
+}
+
+.browseItem:hover,
+.browseItem:focus-visible {
+  background: #f4f8fb;
+  outline: none;
+}
+
+.browseName {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.browseItemDir .browseName {
+  color: #2980b9;
+  font-weight: 600;
+}
+
+.browseItemFile .browseName {
+  color: #1f2328;
+  font-weight: normal;
+}
+
+.symlinkTarget {
+  color: #888;
+  font-weight: normal;
+  font-style: italic;
+}
+
+/* owner | size | modified */
+.browseMeta {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: #5c6370;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.metaSep {
+  margin: 0 6px;
+  color: #ccc;
+}
+
+.browseNotice,
+.browseError {
+  margin: 0;
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 14px;
+  color: #777;
+}
+
+.browseError {
+  color: #c0392b;
+}
+
+/* --- Browse modal: file preview ---------------------------------------- */
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  max-height: 45vh;
+  border-bottom: 1px solid #eee;
+  background: #fcfcfc;
+}
+
+.previewHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #eee;
+}
+
+.previewName {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.previewHeader button {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.previewBody {
+  overflow: auto;
+  padding: 0;
+}
+
+.previewText {
+  margin: 0;
+  padding: 12px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: #1f2328;
+  line-height: 1.55;
+  /* Long lines wrap rather than forcing the whole modal to scroll sideways. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.previewImage {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 12px auto;
+  /* Chequerboard so transparent PNGs are readable. */
+  background-image: linear-gradient(45deg, #eee 25%, transparent 25%),
+    linear-gradient(-45deg, #eee 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #eee 75%),
+    linear-gradient(-45deg, transparent 75%, #eee 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}

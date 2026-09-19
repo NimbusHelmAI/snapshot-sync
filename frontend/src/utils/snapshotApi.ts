@@ -1,6 +1,23 @@
-import { SnapperConfig } from '../types';
+import {
+  SnapperConfig,
+  Snapshot,
+  BrowseResponse,
+  BrowseTarget,
+  FilePreview,
+} from '../types';
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || '';
+
+/**
+ * Throws when a response is not ok, preferring the API's own `{ error }`
+ * message over the bare status text.
+ */
+async function throwIfNotOk(response: Response, fallback: string): Promise<void> {
+  if (response.ok) return;
+
+  const detail = await response.json().catch(() => null);
+  throw new Error(detail?.error || `${fallback}: ${response.statusText}`);
+}
 
 /**
  * Loads snapshot configurations for a given path
@@ -41,5 +58,110 @@ export async function syncSnapshots(
   
   if (!response.ok) {
     throw new Error('Sync failed');
+  }
+}
+
+/**
+ * Lists one directory inside a snapshot.
+ *
+ * @param target  Which snapshot to read, and the disk it lives on.
+ * @param subPath Path relative to the snapshot root; '' is the root itself.
+ */
+export async function browseSnapshot(
+  target: BrowseTarget,
+  subPath: string
+): Promise<BrowseResponse> {
+  const params = new URLSearchParams({ path: target.diskPath });
+  if (subPath) params.set('subPath', subPath);
+
+  const response = await fetch(
+    `${apiBaseUrl}/api/snapshots/${encodeURIComponent(target.config)}` +
+      `/${encodeURIComponent(target.snapshotId)}/browse?${params}`
+  );
+
+  await throwIfNotOk(response, 'Browse failed');
+
+  const data = await response.json();
+  return {
+    items: data.items || [],
+    currentPath: data.currentPath || '',
+    parentPath: data.parentPath ?? null,
+  };
+}
+
+/**
+ * Reads one file inside a snapshot for preview. The backend decides whether
+ * the file is text, an image, or something it cannot display.
+ *
+ * @param subPath Path to the file, relative to the snapshot root.
+ */
+export async function previewFile(
+  target: BrowseTarget,
+  subPath: string
+): Promise<FilePreview> {
+  const params = new URLSearchParams({ path: target.diskPath, subPath });
+
+  const response = await fetch(
+    `${apiBaseUrl}/api/snapshots/${encodeURIComponent(target.config)}` +
+      `/${encodeURIComponent(target.snapshotId)}/file?${params}`
+  );
+
+  await throwIfNotOk(response, 'Could not read file');
+
+  return response.json();
+}
+
+const SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+
+/** Formats a byte count for display, e.g. 2411724 -> "2.3 MB". */
+export function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${SIZE_UNITS[unit]}`;
+}
+
+/** Formats an API timestamp as "YYYY-MM-DD HH:MM", or "—" if unparseable. */
+export function formatModified(modified: string): string {
+  if (!modified) return '—';
+  const parsed = new Date(modified);
+  if (Number.isNaN(parsed.getTime())) return '—';
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} ` +
+    `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`
+  );
+}
+
+/**
+ * Fetch snapshots for a specific config
+ * @param configName - Config name (e.g., "root", "home")
+ * @returns Promise resolving to array of snapshot objects
+ */
+export async function loadSnapshots(
+  configName: string,
+  path?: string
+): Promise<Snapshot[]> {
+  try {
+    // Relative to apiBaseUrl like every other call here, so the Vite proxy
+    // routes it. Hardcoding localhost broke this one call in Docker, where
+    // the proxy target is http://api:3001.
+    const query = path ? `?${new URLSearchParams({ path })}` : '';
+    const response = await fetch(`${apiBaseUrl}/api/snapshots${query}`);
+
+    await throwIfNotOk(response, 'Failed to fetch snapshots');
+
+    const data = await response.json();
+    return data.configs?.[configName] || [];
+  } catch (error) {
+    console.error('Error loading snapshots:', error);
+    throw error;
   }
 }
