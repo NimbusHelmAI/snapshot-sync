@@ -8,6 +8,27 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const BACKUP_DISK = process.env.BACKUP_DISK || '/run/media/amitp/Backup';
 
+/**
+ * Synced snapshots live under <disk>/snapshots/<config>/<id>, with snapper's
+ * metadata alongside each one as <id>.info.xml.
+ *
+ * The namespace exists because the backup disk also holds unrelated
+ * directories at its root — <disk>/src, for one, contains a flat copy of the
+ * source tree that the sync script never wrote. Keeping synced snapshots in
+ * their own subtree stops the two being confused for each other.
+ */
+const BACKUP_SUBDIR = 'snapshots';
+
+/** True when a requested path refers to the external backup disk. */
+function isBackupPath(queryPath: string): boolean {
+  return queryPath === BACKUP_DISK || queryPath.includes('Backup');
+}
+
+/** Directory holding one config's synced snapshots on a backup disk. */
+function backupConfigDir(diskRoot: string, config: string): string {
+  return path.join(diskRoot, BACKUP_SUBDIR, config);
+}
+
 app.use(cors());
 app.use(express.json());
 
@@ -27,9 +48,9 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
       let configPath: string;
       
       // Determine snapshot path based on query
-      if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
-        // Backup: /run/media/amitp/Backup/{config}/
-        configPath = path.join(queryPath, config);
+      if (isBackupPath(queryPath)) {
+        // Backup: <disk>/snapshots/<config>/
+        configPath = backupConfigDir(queryPath, config);
       } else {
         // Local paths
         if (config === 'root') {
@@ -45,7 +66,7 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
       let entries: string[] = [];
       
       try {
-        if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
+        if (isBackupPath(queryPath)) {
           // Backup path: normal read
           if (!fs.existsSync(configPath)) return;
           entries = fs.readdirSync(configPath);
@@ -63,12 +84,17 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
         
         try {
           const snapshotPath = path.join(configPath, entry);
-          const infoXmlPath = path.join(snapshotPath, 'info.xml');
+          // snapper keeps info.xml inside the snapshot directory; the sync
+          // script writes it beside the received subvolume instead, because
+          // btrfs send/receive does not carry snapper's metadata across.
+          const infoXmlPath = isBackupPath(queryPath)
+            ? path.join(configPath, `${entry}.info.xml`)
+            : path.join(snapshotPath, 'info.xml');
           let date = 'unknown';
           
           try {
             let xmlContent = '';
-            if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
+            if (isBackupPath(queryPath)) {
               xmlContent = fs.readFileSync(infoXmlPath, 'utf8');
             } else {
               xmlContent = execFileSync('sudo', ['cat', '--', infoXmlPath], { encoding: 'utf8' });
@@ -77,7 +103,7 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
             if (dateMatch) date = dateMatch[1].split('T')[0];
           } catch (e) {}
           
-          if (queryPath === BACKUP_DISK || queryPath.includes('Backup')) {
+          if (isBackupPath(queryPath)) {
             const stat = fs.statSync(snapshotPath);
             if (stat.isDirectory()) {
               snapshots.push({ id: entry, date });
@@ -105,9 +131,17 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
 app.get('/api/snapshots/:config/:id', (req: Request, res: Response) => {
   try {
     const { config, id } = req.params as { config: string; id: string };
-    const snapPath = path.join(BACKUP_DISK, config, id);
-    const infoXmlPath = path.join(BACKUP_DISK, config, `${id}.info.xml`);
-    
+
+    // Same guard the browse and file endpoints use. Without it, a config of
+    // "../../etc" walks straight out of the backup disk via path.join.
+    if (!SAFE_SEGMENT.test(config) || !SAFE_SEGMENT.test(id)) {
+      return res.status(400).json({ error: 'invalid config or snapshot id' });
+    }
+
+    const configDir = backupConfigDir(BACKUP_DISK, config);
+    const snapPath = path.join(configDir, id);
+    const infoXmlPath = path.join(configDir, `${id}.info.xml`);
+
     if (!fs.existsSync(snapPath) || !fs.existsSync(infoXmlPath)) {
       return res.status(404).json({ error: 'snapshot not found' });
     }
@@ -245,12 +279,8 @@ function resolveSubPath(basePath: string, subPath: string): string | null {
   return escapes ? null : resolved;
 }
 
-function isBackupPath(queryPath: string): boolean {
-  return queryPath === BACKUP_DISK || queryPath.includes('Backup');
-}
-
 function snapshotBasePath(queryPath: string, config: string, id: string): string {
-  if (isBackupPath(queryPath)) return path.join(queryPath, config, id);
+  if (isBackupPath(queryPath)) return path.join(backupConfigDir(queryPath, config), id);
   if (config === 'root') return path.join('/.snapshots', id);
   if (config === 'src') return path.join('/home/amitp/src/.snapshots', id);
   return path.join('/', config, '.snapshots', id);
@@ -482,10 +512,10 @@ app.get('/api/configs', (req: Request, res: Response) => {
     const configs: any[] = [];
     
     // List snapshot configs (root, home, src)
-    const backupPath = queryPath === '/' || queryPath === '' ? '/run/media/amitp/Backup' : queryPath;
+    const backupPath = queryPath === '/' || queryPath === '' ? BACKUP_DISK : queryPath;
     const validConfigs = ['root', 'home', 'src'];
     for (const config of validConfigs) {
-      const configPath = join(backupPath, config);
+      const configPath = backupConfigDir(backupPath, config);
       if (existsSync(configPath)) {
         const snapshots = readdirSync(configPath).filter((f: string) => !f.endsWith('.info.xml'));
         configs.push({ name: config, path: config, snapshotCount: snapshots.length });
