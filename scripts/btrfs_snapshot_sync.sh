@@ -47,6 +47,13 @@ fi
 DEST_FSTYPE=$(findmnt -no FSTYPE --target "$DEST_ROOT") || die "cannot stat filesystem of '$DEST_ROOT'."
 [[ "$DEST_FSTYPE" == "btrfs" ]] || die "destination '$DEST_ROOT' is '$DEST_FSTYPE', not btrfs."
 
+# Synced snapshots live in their own subtree, <dest>/snapshots/<config>/<id>,
+# rather than directly off the disk root. The root also holds unrelated
+# directories -- <dest>/src is a flat copy of the source tree this script never
+# wrote -- and without a namespace there is no way to tell the two apart.
+# Must stay in step with BACKUP_SUBDIR in backend/src/server.ts.
+SNAPSHOT_SUBDIR="snapshots"
+
 REPORT_DIR="${DEST_ROOT}/reports"
 mkdir -p "$REPORT_DIR"
 REPORT_FILE="${REPORT_DIR}/sync_report_$(date '+%Y%m%d_%H%M%S').md"
@@ -185,7 +192,7 @@ TOTAL_FAILED=0
 
 for cfg_name in "${!CONFIGS[@]}"; do
   src_root="${CONFIGS[$cfg_name]}"
-  cfg_dest_root="${DEST_ROOT}/${cfg_name}"
+  cfg_dest_root="${DEST_ROOT}/${SNAPSHOT_SUBDIR}/${cfg_name}"
   mkdir -p "$cfg_dest_root"
   state_file="${cfg_dest_root}/.last_synced_snapshot"
 
