@@ -15,7 +15,7 @@ import styles from './SnapshotComparison.module.css';
 
 /** Shown on the controls that are deliberately inert until NHA-93 lands. */
 const SYNC_DISABLED_HINT =
-  'Not implemented yet — snapshot sync, compare and restore are tracked in NHA-93';
+  'Not implemented yet — snapshot sync and restore are tracked in NHA-93';
 
 /** Leading glyph for each kind of directory entry in the browse modal. */
 const ENTRY_ICON: Record<BrowseItem['type'], string> = {
@@ -298,11 +298,6 @@ export const SnapshotComparison: React.FC = () => {
     closePreview();
   };
 
-  const handleCompare = (config: string, snapshotId: string) => {
-    console.log(`[handleCompare] config=${config}, id=${snapshotId}`);
-
-  };
-
   const handleRestore = (config: string, snapshotId: string) => {
     console.log(`[handleRestore] config=${config}, id=${snapshotId}`);
 
@@ -483,7 +478,6 @@ export const SnapshotComparison: React.FC = () => {
           selectedConfig={selectedConfigLeft}
           onConfigSelect={setSelectedConfigLeft}
           onBrowse={handleBrowse}
-          onCompare={handleCompare}
           onRestore={handleRestore}
         />
 
@@ -526,7 +520,6 @@ export const SnapshotComparison: React.FC = () => {
           selectedConfig={selectedConfigRight}
           onConfigSelect={setSelectedConfigRight}
           onBrowse={handleBrowse}
-          onCompare={handleCompare}
           onRestore={handleRestore}
         />
       </div>
@@ -552,7 +545,6 @@ interface DiskPanelProps {
   selectedConfig: string | null;
   onConfigSelect: (configName: string) => void;
   onBrowse: (config: string, snapshotId: string, diskPath: string) => Promise<void>;
-  onCompare: (config: string, snapshotId: string) => void;
   onRestore: (config: string, snapshotId: string) => void;
 }
 
@@ -567,7 +559,6 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
   selectedSnapshots,
   onToggleSnapshot,
   onBrowse,
-  onCompare,
   onRestore,
   // selectedConfig and onConfigSelect - TODO: implement config override UI
 }) => {
@@ -641,15 +632,7 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                   <div key={snapKey} className={styles.selectedSnapshot}>
                     <span className={styles.snapshotId}>📸 {snapKey.split(':')[1]}</span>
                     <div className={styles.actionButtons}>
-                      {/* Compare and Restore are stubs until NHA-93. */}
-                      <button
-                        className={styles.actionBtn}
-                        disabled
-                        title={SYNC_DISABLED_HINT}
-                        onClick={() => onCompare(cfg.name, snapKey.split(':')[1])}
-                      >
-                        Compare
-                      </button>
+                      {/* Restore is a stub until NHA-93. */}
                       <button
                         className={styles.actionBtn}
                         onClick={() => onBrowse(cfg.name, snapKey.split(':')[1], disk.path)}
