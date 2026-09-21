@@ -5,8 +5,50 @@ import path, { join } from 'path';
 import cors from 'cors';
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT || 3001);
 const BACKUP_DISK = process.env.BACKUP_DISK || '/run/media/amitp/Backup';
+
+// ---------------------------------------------------------------------------
+// Network exposure
+//
+// This process reads any file in any snapshot -- for local snapshots as root,
+// via sudo -- and has no authentication. Every home snapshot contains ~/.ssh.
+// It must therefore be reachable only from this machine.
+//
+// Until 2026-09-21 it listened on all interfaces with `Access-Control-Allow-
+// Origin: *`, and Fedora Workstation's default firewall zone opens every TCP
+// port above 1024, so the preview endpoint was reachable from the local
+// network.
+//
+// Three layers, because each covers a gap the others leave:
+//   HOST          -- bind loopback, so nothing off-machine can connect at all
+//   CORS_ORIGINS  -- stop other web pages in the user's browser from reading
+//                    responses from this API
+//   ALLOWED_HOSTS -- refuse requests whose Host header is not this machine,
+//                    which is what defeats DNS rebinding: a hostile page that
+//                    points its own domain at 127.0.0.1 is same-origin as far
+//                    as the browser is concerned, so CORS alone cannot help
+//
+// Docker overrides HOST to 0.0.0.0 inside the container and publishes the port
+// on the host's loopback only; see docker-compose.yml.
+// ---------------------------------------------------------------------------
+const HOST = process.env.HOST || '127.0.0.1';
+
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const ALLOWED_HOSTNAMES = new Set([
+  'localhost',
+  '127.0.0.1',
+  '::1',
+  '[::1]',
+  ...(process.env.ALLOWED_HOSTS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
+]);
 
 /**
  * Synced snapshots live under <disk>/snapshots/<config>/<id>, with snapper's
@@ -29,7 +71,14 @@ function backupConfigDir(diskRoot: string, config: string): string {
   return path.join(diskRoot, BACKUP_SUBDIR, config);
 }
 
-app.use(cors());
+app.use((req: Request, res: Response, next) => {
+  // req.hostname is the Host header with the port stripped.
+  if (!ALLOWED_HOSTNAMES.has(req.hostname)) {
+    return res.status(403).json({ error: 'Host not allowed' });
+  }
+  next();
+});
+app.use(cors({ origin: CORS_ORIGINS }));
 app.use(express.json());
 
 // Health check
@@ -279,6 +328,123 @@ function resolveSubPath(basePath: string, subPath: string): string | null {
   return escapes ? null : resolved;
 }
 
+/**
+ * Resolves every symlink in `p`. Local snapshot trees are root-owned (0750),
+ * so resolving inside them needs the same privilege as listing them does.
+ * `-n` so a missing sudoers entry fails immediately rather than waiting on a
+ * password prompt that will never be answered.
+ */
+function realPathOf(p: string, useSudo: boolean): string {
+  if (useSudo) {
+    return execFileSync('sudo', ['-n', 'realpath', '-e', '--', p], {
+      encoding: 'utf8',
+      timeout: 15_000,
+    }).trim();
+  }
+  return fs.realpathSync(p);
+}
+
+type Contained =
+  | { ok: true; path: string }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Decides where a request may actually read, after symlinks.
+ *
+ * resolveSubPath() compares paths as strings and never touches the
+ * filesystem, so it cannot see symlinks. A link inside a snapshot pointing at
+ * an absolute path passes it untouched, and `sudo cat` then follows the link
+ * as root: `ln -s /etc/shadow ~/x`, wait for the next hourly snapshot, and the
+ * preview endpoint returns the live /etc/shadow. Absolute links are also
+ * common in root snapshots anyway, where following one silently shows the
+ * live host's file instead of the snapshot's.
+ *
+ * So resolve both the snapshot root and the target, and require the resolved
+ * target to lie inside the resolved root. Resolving the root as well is what
+ * keeps symlinked snapshots working: snapshots/home/747 -> ../../home/747
+ * resolves to the real subvolume, and its contents resolve beneath that.
+ *
+ * The caller must hand the returned, already-resolved path to ls/cat rather
+ * than the original, so nothing is resolved a second time. It also means ls
+ * is never given a symlink as its argument, which is why browsing into a
+ * symlinked snapshot needs no `ls -H`.
+ */
+function containedPath(basePath: string, subPath: string, useSudo: boolean): Contained {
+  const lexical = resolveSubPath(basePath, subPath);
+  if (lexical === null) {
+    return { ok: false, status: 403, error: 'Access denied' };
+  }
+
+  let realBase: string;
+  let realTarget: string;
+  try {
+    realBase = realPathOf(basePath, useSudo);
+    realTarget = realPathOf(lexical, useSudo);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException & { message: string };
+    if (err.code === 'ENOENT' || /No such file or directory/i.test(err.message)) {
+      return { ok: false, status: 404, error: 'Path not found' };
+    }
+    if (err.code === 'EACCES' || /Permission denied/i.test(err.message)) {
+      return { ok: false, status: 403, error: 'Permission denied' };
+    }
+    if (/a password is required|not allowed|a terminal is required/i.test(err.message)) {
+      console.error('sudo refused realpath: sudoers needs a NOPASSWD rule for /usr/bin/realpath');
+      return { ok: false, status: 500, error: 'Server is not permitted to resolve snapshot paths' };
+    }
+    console.error(`realpath failed for ${lexical}:`, err.message);
+    return { ok: false, status: 500, error: 'Could not resolve path' };
+  }
+
+  const inside = realTarget === realBase || realTarget.startsWith(realBase + path.sep);
+  if (!inside) {
+    console.warn(`Refused ${lexical}: resolves to ${realTarget}, outside ${realBase}`);
+    return { ok: false, status: 403, error: 'Access denied' };
+  }
+
+  return { ok: true, path: realTarget };
+}
+
+/** True for a permission failure from fs, from ls/cat/realpath, or from containedPath. */
+function isPermissionDenied(error: unknown): boolean {
+  const err = error as NodeJS.ErrnoException & { message?: string };
+  return err?.code === 'EACCES' || /Permission denied/i.test(err?.message ?? '');
+}
+
+/**
+ * Picks the privilege a snapshot read runs with.
+ *
+ * Local snapshot trees are root-owned 0750, so local reads always use sudo.
+ * The backup disk is tried unprivileged first -- most of it is readable by the
+ * user the server runs as -- but btrfs receive preserves ownership and modes,
+ * so a received home snapshot still has /home/gitlab-runner at 0700 owned by
+ * gitlab-runner, exactly as on the source. Reads that hit that are retried
+ * under sudo instead of failing with 403.
+ *
+ * `op` must throw on permission failure (see isPermissionDenied) rather than
+ * returning an error value, or the retry cannot see it.
+ */
+function withSnapshotPrivilege<T>(local: boolean, op: (useSudo: boolean) => T): T {
+  if (local) return op(true);
+  try {
+    return op(false);
+  } catch (error) {
+    if (!isPermissionDenied(error)) throw error;
+    return op(true);
+  }
+}
+
+/** containedPath, but throwing on permission failure so withSnapshotPrivilege can retry. */
+function containedOrThrow(basePath: string, subPath: string, useSudo: boolean): Contained {
+  const contained = containedPath(basePath, subPath, useSudo);
+  if (!contained.ok && contained.error === 'Permission denied') {
+    const err: NodeJS.ErrnoException = new Error('Permission denied');
+    err.code = 'EACCES';
+    throw err;
+  }
+  return contained;
+}
+
 function snapshotBasePath(queryPath: string, config: string, id: string): string {
   if (isBackupPath(queryPath)) return path.join(backupConfigDir(queryPath, config), id);
   if (config === 'root') return path.join('/.snapshots', id);
@@ -299,15 +465,21 @@ app.get('/api/snapshots/:config/:id/browse', (req: Request, res: Response) => {
   const queryPath = (req.query.path as string) || BACKUP_DISK;
   const subPath = (req.query.subPath as string) || '';
 
+  const local = !isBackupPath(queryPath);
   const basePath = snapshotBasePath(queryPath, config, id);
-  const targetPath = resolveSubPath(basePath, subPath);
-
-  if (targetPath === null) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
+  let targetPath = basePath;
 
   try {
-    const items = listDirectory(targetPath, !isBackupPath(queryPath));
+    const result = withSnapshotPrivilege(local, (useSudo) => {
+      const contained = containedOrThrow(basePath, subPath, useSudo);
+      if (!contained.ok) return contained;
+      targetPath = contained.path;
+      return { ok: true as const, items: listDirectory(contained.path, useSudo) };
+    });
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    const items = result.items;
 
     items.sort((a, b) => {
       const aDir = a.type === 'directory';
@@ -420,17 +592,23 @@ app.get('/api/snapshots/:config/:id/file', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'subPath is required' });
   }
 
+  const local = !isBackupPath(queryPath);
   const basePath = snapshotBasePath(queryPath, config, id);
-  const targetPath = resolveSubPath(basePath, subPath);
-
-  if (targetPath === null) {
-    return res.status(403).json({ error: 'Access denied' });
-  }
+  let targetPath = basePath;
 
   const name = path.posix.basename(subPath);
 
   try {
-    const buffer = readFileCapped(targetPath, !isBackupPath(queryPath));
+    const result = withSnapshotPrivilege(local, (useSudo) => {
+      const contained = containedOrThrow(basePath, subPath, useSudo);
+      if (!contained.ok) return contained;
+      targetPath = contained.path;
+      return { ok: true as const, buffer: readFileCapped(contained.path, useSudo) };
+    });
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    const buffer = result.buffer;
 
     const imageMime = detectImageMime(buffer);
     if (imageMime) {
@@ -528,8 +706,8 @@ app.get('/api/configs', (req: Request, res: Response) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Snapshot Sync API running on port ${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Snapshot Sync API listening on http://${HOST}:${PORT}`);
   console.log(`Backup disk: ${BACKUP_DISK}`);
   console.log('Configs enabled: root, home, src');
 });

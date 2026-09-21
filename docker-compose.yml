@@ -3,12 +3,19 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    # Loopback only. A bare "3001:3001" publishes on every host interface, and
+    # Docker writes its own iptables rules, so it bypasses firewalld entirely.
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     environment:
       - BACKUP_DISK=/backup
       - SCRIPTS_DIR=/scripts
       - PORT=3001
+      # Inside the container the API must listen on all interfaces so the web
+      # container can reach it; exposure to the host is limited by `ports` above.
+      - HOST=0.0.0.0
+      # The Vite proxy rewrites Host to the service name (changeOrigin).
+      - ALLOWED_HOSTS=api
     volumes:
       - /run/media/amitp/Backup:/backup:ro
       - ./scripts:/scripts:ro
@@ -23,7 +30,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.dev
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - DOCKER=true
     depends_on:
