@@ -71,6 +71,33 @@ function backupConfigDir(diskRoot: string, config: string): string {
   return path.join(diskRoot, BACKUP_SUBDIR, config);
 }
 
+/** Where snapper keeps one config's snapshots on this machine. */
+function localConfigDir(config: string): string {
+  if (config === 'root') return '/.snapshots';
+  if (config === 'src') return '/home/amitp/src/.snapshots';
+  return path.join('/', config, '.snapshots');
+}
+
+/**
+ * Snapshot ids in one config directory, or null if the directory is missing
+ * or unreadable. Local snapshot directories are root-owned 0750, so they are
+ * listed through sudo; the backup disk is read directly. Only numeric entries
+ * count -- the backup side also holds <id>.info.xml files and the sync
+ * script's state file.
+ */
+function listSnapshotIds(configPath: string, local: boolean): string[] | null {
+  try {
+    const entries = local
+      ? execFileSync('sudo', ['ls', '--', configPath], { encoding: 'utf8' }).split('\n')
+      : fs.existsSync(configPath)
+        ? fs.readdirSync(configPath)
+        : null;
+    return entries ? entries.filter((e) => /^\d+$/.test(e.trim())).map((e) => e.trim()) : null;
+  } catch {
+    return null;
+  }
+}
+
 app.use((req: Request, res: Response, next) => {
   // req.hostname is the Host header with the port stripped.
   if (!ALLOWED_HOSTNAMES.has(req.hostname)) {
@@ -101,14 +128,7 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
         // Backup: <disk>/snapshots/<config>/
         configPath = backupConfigDir(queryPath, config);
       } else {
-        // Local paths
-        if (config === 'root') {
-          configPath = '/.snapshots';
-        } else if (config === 'src') {
-          configPath = '/home/amitp/src/.snapshots';
-        } else {
-          configPath = path.join('/', config, '.snapshots');
-        }
+        configPath = localConfigDir(config);
       }
       
       const snapshots: any[] = [];
@@ -447,9 +467,7 @@ function containedOrThrow(basePath: string, subPath: string, useSudo: boolean): 
 
 function snapshotBasePath(queryPath: string, config: string, id: string): string {
   if (isBackupPath(queryPath)) return path.join(backupConfigDir(queryPath, config), id);
-  if (config === 'root') return path.join('/.snapshots', id);
-  if (config === 'src') return path.join('/home/amitp/src/.snapshots', id);
-  return path.join('/', config, '.snapshots', id);
+  return path.join(localConfigDir(config), id);
 }
 
 const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
@@ -684,26 +702,25 @@ function formatBytes(bytes: number): string {
 
 
 // List available configs
+//
+// Each disk is listed from its own snapshot directories. This used to map
+// the local path '/' onto the backup disk, so the Local panel showed the
+// backup's configs and snapshot counts -- and showed nothing at all while the
+// backup disk was unmounted.
 app.get('/api/configs', (req: Request, res: Response) => {
-  try {
-    const queryPath = req.query.path as string || '/';
-    const configs: any[] = [];
-    
-    // List snapshot configs (root, home, src)
-    const backupPath = queryPath === '/' || queryPath === '' ? BACKUP_DISK : queryPath;
-    const validConfigs = ['root', 'home', 'src'];
-    for (const config of validConfigs) {
-      const configPath = backupConfigDir(backupPath, config);
-      if (existsSync(configPath)) {
-        const snapshots = readdirSync(configPath).filter((f: string) => !f.endsWith('.info.xml'));
-        configs.push({ name: config, path: config, snapshotCount: snapshots.length });
-      }
-    }
+  const queryPath = (req.query.path as string) || '/';
+  const local = !isBackupPath(queryPath);
+  const configs: { name: string; path: string; snapshotCount: number }[] = [];
 
-    res.json({ configs });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to list configs' });
+  for (const config of ['root', 'home', 'src']) {
+    const configPath = local ? localConfigDir(config) : backupConfigDir(queryPath, config);
+    const ids = listSnapshotIds(configPath, local);
+    if (ids !== null) {
+      configs.push({ name: config, path: config, snapshotCount: ids.length });
+    }
   }
+
+  res.json({ configs });
 });
 
 app.listen(PORT, HOST, () => {

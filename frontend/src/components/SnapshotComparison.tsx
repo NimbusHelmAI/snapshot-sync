@@ -126,12 +126,24 @@ export const SnapshotComparison: React.FC = () => {
   const refreshConfigs = async () => {
     setLoading(true);
     try {
-      const [leftConfigs, rightConfigs] = await Promise.all([
+      // allSettled, not all: one disk failing must not blank the other panel.
+      const [leftResult, rightResult] = await Promise.allSettled([
         loadConfigs(left.path),
         loadConfigs(right.path),
       ]);
-      setLeft((prev) => ({ ...prev, configs: leftConfigs }));
-      setRight((prev) => ({ ...prev, configs: rightConfigs }));
+      setLeft((prev) => ({
+        ...prev,
+        configs: leftResult.status === 'fulfilled' ? leftResult.value : [],
+      }));
+      setRight((prev) => ({
+        ...prev,
+        configs: rightResult.status === 'fulfilled' ? rightResult.value : [],
+      }));
+      const failed = [
+        leftResult.status === 'rejected' ? left.label : null,
+        rightResult.status === 'rejected' ? right.label : null,
+      ].filter(Boolean);
+      setError(failed.length ? `Could not load configs for ${failed.join(' and ')}` : null);
     } finally {
       setLoading(false);
     }
