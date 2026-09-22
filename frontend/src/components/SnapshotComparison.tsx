@@ -17,6 +17,25 @@ import styles from './SnapshotComparison.module.css';
 const SYNC_DISABLED_HINT =
   'Not implemented yet — snapshot sync and restore are tracked in NHA-93';
 
+/**
+ * Identifies one config on one disk.
+ *
+ * Both panels can show a config of the same name -- `home` exists locally and
+ * on the backup disk -- so state keyed by config name alone is shared between
+ * them. It was: whichever panel expanded `home` first fetched its snapshot
+ * list, and the other panel displayed that same list, so a backup-only id such
+ * as 747 appeared under the local disk and could not be browsed there.
+ *
+ * Keyed by the disk's path rather than by which side of the screen it sits
+ * on, so the key follows the disk through Swap and through a changed path in
+ * Settings. NUL cannot occur in a path or a config name, so it cannot collide.
+ */
+const configKey = (diskPath: string, config: string) => `${diskPath}\u0000${config}`;
+
+/** Identifies one snapshot of one config on one disk. See configKey. */
+const snapshotKey = (diskPath: string, config: string, id: string) =>
+  `${configKey(diskPath, config)}\u0000${id}`;
+
 /** Leading glyph for each kind of directory entry in the browse modal. */
 const ENTRY_ICON: Record<BrowseItem['type'], string> = {
   directory: '📁',
@@ -141,55 +160,68 @@ export const SnapshotComparison: React.FC = () => {
     setSelectedConfigs(newSelected);
   };
 
-  const toggleExpanded = async (configName: string, diskSide: 'left' | 'right') => {
-    console.log(`[toggleExpanded] config=${configName}, side=${diskSide}`);
-    const newExpanded = new Set(expandedConfigs);
-    if (newExpanded.has(configName)) {
-      newExpanded.delete(configName);
-    } else {
-      newExpanded.add(configName);
-      // Set as selected config for this side
-      if (diskSide === 'left') {
-        setSelectedConfigLeft(configName);
-        // Auto-mirror to right if not already selected
-        if (!selectedConfigRight) {
-          setSelectedConfigRight(configName);
-        }
-      } else {
+  /**
+   * Expands or collapses one config on one disk, fetching its snapshots from
+   * that disk's own path.
+   *
+   * The path used to be hardcoded -- left fetched from '/', right from the
+   * backup disk -- regardless of Settings and of Swap, so after a Swap the left
+   * panel was labelled as the backup disk while fetching from '/'.
+   *
+   * Expansion is applied immediately and the list refetched on every expand:
+   * snapper adds snapshots hourly, so a list cached for the life of the page
+   * goes stale. A previously loaded list stays on screen while the refetch
+   * runs, rather than blanking.
+   */
+  const toggleExpanded = async (
+    configName: string,
+    diskSide: 'left' | 'right',
+    diskPath: string
+  ) => {
+    const key = configKey(diskPath, configName);
+    const expanding = !expandedConfigs.has(key);
+
+    // Functional update: the fetch below awaits, and deriving the new set from
+    // a value captured before the await would undo any expand or collapse the
+    // user made in the meantime.
+    setExpandedConfigs((prev) => {
+      const next = new Set(prev);
+      if (expanding) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+
+    if (!expanding) return;
+
+    if (diskSide === 'left') {
+      setSelectedConfigLeft(configName);
+      if (!selectedConfigRight) {
         setSelectedConfigRight(configName);
       }
-      // Fetch snapshots if not already loaded
-      if (!loadedSnapshots[configName]) {
-        try {
-          setLoading(true);
-          const path = diskSide === 'left' ? '/' : '/run/media/amitp/Backup';
-          console.log(`[loadSnapshots] calling for config=${configName}, path=${path}`);
-          const snapshots = await loadSnapshots(configName, path);
-          console.log(`[loadSnapshots] got ${snapshots?.length || 0} snapshots`);
-          setLoadedSnapshots(prev => ({
-            ...prev,
-            [configName]: snapshots,
-          }));
-        } catch (err) {
-          console.error(`Failed to load snapshots for ${configName}:`, err);
-          setError(`Failed to load snapshots for ${configName}`);
-        } finally {
-          setLoading(false);
-        }
-      }
+    } else {
+      setSelectedConfigRight(configName);
     }
-    setExpandedConfigs(newExpanded);
+
+    try {
+      setLoading(true);
+      const snapshots = await loadSnapshots(configName, diskPath);
+      setLoadedSnapshots((prev) => ({ ...prev, [key]: snapshots }));
+    } catch (err) {
+      console.error(`Failed to load snapshots for ${configName} on ${diskPath}:`, err);
+      setError(`Failed to load snapshots for ${configName} on ${diskPath}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const toggleSnapshot = (configName: string, snapshotId: string) => {
-    const key = `${configName}:${snapshotId}`;
-    const newSelected = new Set(selectedSnapshots);
-    if (newSelected.has(key)) {
-      newSelected.delete(key);
-    } else {
-      newSelected.add(key);
-    }
-    setSelectedSnapshots(newSelected);
+  const toggleSnapshot = (diskPath: string, configName: string, snapshotId: string) => {
+    const key = snapshotKey(diskPath, configName, snapshotId);
+    setSelectedSnapshots((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   };
 
   const handleSync = async (direction: 'leftToRight' | 'rightToLeft') => {
@@ -538,10 +570,16 @@ interface DiskPanelProps {
   selectedConfigs: Set<string>;
   onToggleConfig: (name: string) => void;
   expandedConfigs: Set<string>;
-  onToggleExpanded: (configName: string, diskSide: 'left' | 'right') => Promise<void>;
+  onToggleExpanded: (
+    configName: string,
+    diskSide: 'left' | 'right',
+    diskPath: string
+  ) => Promise<void>;
+  /** Keyed by configKey(diskPath, config). */
   loadedSnapshots: Record<string, any[]>;
+  /** Holds snapshotKey(diskPath, config, id) values. */
   selectedSnapshots: Set<string>;
-  onToggleSnapshot: (configName: string, snapshotId: string) => void;
+  onToggleSnapshot: (diskPath: string, configName: string, snapshotId: string) => void;
   selectedConfig: string | null;
   onConfigSelect: (configName: string) => void;
   onBrowse: (config: string, snapshotId: string, diskPath: string) => Promise<void>;
@@ -572,7 +610,20 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
       <div className={styles.diskPath}>{disk.path}</div>
 
       <div className={styles.configList}>
-        {disk.configs.map((cfg) => (
+        {disk.configs.map((cfg) => {
+          const cKey = configKey(disk.path, cfg.name);
+          const isExpanded = expandedConfigs.has(cKey);
+          const snapshots = loadedSnapshots[cKey];
+          // This panel's own selections for this config, as snapshot ids.
+          // Matching on the full key prefix rather than startsWith(cfg.name),
+          // which also matched other panels and any config whose name merely
+          // begins with this one.
+          const selectedPrefix = cKey + '\u0000';
+          const selectedIds = Array.from(selectedSnapshots)
+            .filter((k) => k.startsWith(selectedPrefix))
+            .map((k) => k.slice(selectedPrefix.length));
+
+          return (
           <div key={cfg.name}>
             <div className={styles.configItem}>
               <input
@@ -589,25 +640,26 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
               </div>
               <button
                 className={styles.expandButton}
-                onClick={() => onToggleExpanded(cfg.name, diskSide)}
-                title={expandedConfigs.has(cfg.name) ? 'Collapse' : 'Expand'}
+                onClick={() => onToggleExpanded(cfg.name, diskSide, disk.path)}
+                title={isExpanded ? 'Collapse' : 'Expand'}
               >
-                {expandedConfigs.has(cfg.name) ? '▼' : '▶'}
+                {isExpanded ? '▼' : '▶'}
               </button>
             </div>
-            {expandedConfigs.has(cfg.name) && (
+            {isExpanded && (
               <div className={styles.snapshotList}>
-                {loadedSnapshots[cfg.name] ? (
-                  loadedSnapshots[cfg.name].length > 0 ? (
+                {snapshots ? (
+                  snapshots.length > 0 ? (
                     <ul className={styles.snapshotItems}>
-                      {loadedSnapshots[cfg.name].map((snap: any) => {
-                        const snapKey = `${cfg.name}:${snap.id}`;
-                        const isSelected = selectedSnapshots.has(snapKey);
+                      {snapshots.map((snap: any) => {
+                        const isSelected = selectedSnapshots.has(
+                          snapshotKey(disk.path, cfg.name, snap.id)
+                        );
                         return (
                           <li
                             key={snap.id}
                             className={`${styles.snapshotItem} ${isSelected ? styles.snapshotItemSelected : ''}`}
-                            onClick={() => onToggleSnapshot(cfg.name, snap.id)}
+                            onClick={() => onToggleSnapshot(disk.path, cfg.name, snap.id)}
                           >
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
                               <span>📸 {snap.id}</span>
@@ -625,17 +677,17 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                 )}
               </div>
             )}
-            {expandedConfigs.has(cfg.name) && selectedSnapshots.size > 0 && (
+            {isExpanded && selectedIds.length > 0 && (
               <div className={styles.selectedSnapshotInfo}>
                 <p className={styles.selectedLabel}>Selected Snapshots:</p>
-                {Array.from(selectedSnapshots).filter(key => key.startsWith(cfg.name)).map(snapKey => (
-                  <div key={snapKey} className={styles.selectedSnapshot}>
-                    <span className={styles.snapshotId}>📸 {snapKey.split(':')[1]}</span>
+                {selectedIds.map((snapId) => (
+                  <div key={snapId} className={styles.selectedSnapshot}>
+                    <span className={styles.snapshotId}>📸 {snapId}</span>
                     <div className={styles.actionButtons}>
                       {/* Restore is a stub until NHA-93. */}
                       <button
                         className={styles.actionBtn}
-                        onClick={() => onBrowse(cfg.name, snapKey.split(':')[1], disk.path)}
+                        onClick={() => onBrowse(cfg.name, snapId, disk.path)}
                       >
                         Browse
                       </button>
@@ -643,7 +695,7 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                         className={styles.actionBtn}
                         disabled
                         title={SYNC_DISABLED_HINT}
-                        onClick={() => onRestore(cfg.name, snapKey.split(':')[1])}
+                        onClick={() => onRestore(cfg.name, snapId)}
                       >
                         Restore
                       </button>
@@ -653,7 +705,8 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
         {disk.configs.length === 0 && (
           <p className={styles.empty}>No configs found</p>
         )}
