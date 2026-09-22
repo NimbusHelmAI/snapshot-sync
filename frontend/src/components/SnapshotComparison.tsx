@@ -18,6 +18,14 @@ const SYNC_DISABLED_HINT =
   'Not implemented yet — snapshot sync and restore are tracked in NHA-93';
 
 /**
+ * Separator inside state keys. NUL rather than something readable like '::'
+ * because NUL is the one character that cannot appear in a Linux path or a
+ * snapper config name, so a key can never be ambiguous; '/mnt/a::b' is a
+ * legal path. Named so that it doesn't show up as a bare ^@ in diffs.
+ */
+const KEY_SEP = '\u0000';
+
+/**
  * Identifies one config on one disk.
  *
  * Both panels can show a config of the same name -- `home` exists locally and
@@ -30,11 +38,11 @@ const SYNC_DISABLED_HINT =
  * on, so the key follows the disk through Swap and through a changed path in
  * Settings. NUL cannot occur in a path or a config name, so it cannot collide.
  */
-const configKey = (diskPath: string, config: string) => `${diskPath}\u0000${config}`;
+const configKey = (diskPath: string, config: string) => `${diskPath}${KEY_SEP}${config}`;
 
 /** Identifies one snapshot of one config on one disk. See configKey. */
 const snapshotKey = (diskPath: string, config: string, id: string) =>
-  `${configKey(diskPath, config)}\u0000${id}`;
+  `${configKey(diskPath, config)}${KEY_SEP}${id}`;
 
 /** Leading glyph for each kind of directory entry in the browse modal. */
 const ENTRY_ICON: Record<BrowseItem['type'], string> = {
@@ -618,7 +626,7 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
           // Matching on the full key prefix rather than startsWith(cfg.name),
           // which also matched other panels and any config whose name merely
           // begins with this one.
-          const selectedPrefix = cKey + '\u0000';
+          const selectedPrefix = cKey + KEY_SEP;
           const selectedIds = Array.from(selectedSnapshots)
             .filter((k) => k.startsWith(selectedPrefix))
             .map((k) => k.slice(selectedPrefix.length));
