@@ -71,6 +71,9 @@ function backupConfigDir(diskRoot: string, config: string): string {
   return path.join(diskRoot, BACKUP_SUBDIR, config);
 }
 
+/** The snapper configs this tool knows about, on either disk. */
+const CONFIG_NAMES = ['root', 'home', 'src'] as const;
+
 /** Where snapper keeps one config's snapshots on this machine. */
 function localConfigDir(config: string): string {
   if (config === 'root') return '/.snapshots';
@@ -88,7 +91,9 @@ function localConfigDir(config: string): string {
 function listSnapshotIds(configPath: string, local: boolean): string[] | null {
   try {
     const entries = local
-      ? execFileSync('sudo', ['ls', '--', configPath], { encoding: 'utf8' }).split('\n')
+      ? // -n: fail at once if sudo would ask for a password, rather than
+        // blocking the request on a prompt nobody can answer (NHA-101).
+        execFileSync('sudo', ['-n', 'ls', '--', configPath], { encoding: 'utf8' }).split('\n')
       : fs.existsSync(configPath)
         ? fs.readdirSync(configPath)
         : null;
@@ -118,9 +123,7 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
   try {
     const queryPath = req.query.path as string || BACKUP_DISK;
     const configs: Record<string, any[]> = {};
-    const validConfigs = ['root', 'home', 'src'];
-    
-    validConfigs.forEach(config => {
+    CONFIG_NAMES.forEach(config => {
       let configPath: string;
       
       // Determine snapshot path based on query
@@ -712,7 +715,7 @@ app.get('/api/configs', (req: Request, res: Response) => {
   const local = !isBackupPath(queryPath);
   const configs: { name: string; path: string; snapshotCount: number }[] = [];
 
-  for (const config of ['root', 'home', 'src']) {
+  for (const config of CONFIG_NAMES) {
     const configPath = local ? localConfigDir(config) : backupConfigDir(queryPath, config);
     const ids = listSnapshotIds(configPath, local);
     if (ids !== null) {

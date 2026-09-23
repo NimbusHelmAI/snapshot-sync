@@ -139,10 +139,16 @@ export const SnapshotComparison: React.FC = () => {
         ...prev,
         configs: rightResult.status === 'fulfilled' ? rightResult.value : [],
       }));
-      const failed = [
-        leftResult.status === 'rejected' ? left.label : null,
-        rightResult.status === 'rejected' ? right.label : null,
-      ].filter(Boolean);
+      const failed: string[] = [];
+      for (const [disk, result] of [
+        [left, leftResult],
+        [right, rightResult],
+      ] as const) {
+        if (result.status === 'rejected') {
+          console.error(`Failed to load configs for ${disk.label} (${disk.path}):`, result.reason);
+          failed.push(disk.label);
+        }
+      }
       setError(failed.length ? `Could not load configs for ${failed.join(' and ')}` : null);
     } finally {
       setLoading(false);
