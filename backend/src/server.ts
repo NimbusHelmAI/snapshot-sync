@@ -82,15 +82,59 @@ function localConfigDir(config: string): string {
 }
 
 /**
- * Snapshot ids in one config directory, or null if the directory is missing
- * or unreadable. Local snapshot directories are root-owned 0750, so they are
- * listed through sudo; the backup disk is read directly. Only numeric entries
- * count -- the backup side also holds <id>.info.xml files and the sync
- * script's state file.
+ * Runs one read-only command under `sudo -n`. -n makes a missing sudoers rule
+ * (or an expired login) fail at once instead of blocking the request on a
+ * password prompt nobody can answer. stderr is captured, not inherited: the
+ * caller decides what a refusal means, and sudo's own message in the server
+ * log would only look like a fault.
  */
-function listSnapshotIds(configPath: string, local: boolean): string[] | null {
+function sudoRead(args: string[]): string {
+  return execFileSync('sudo', ['-n', ...args], {
+    encoding: 'utf8',
+    timeout: 15_000,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+/**
+ * Entries of one directory, or null if it does not exist.
+ *
+ * Read as the server's own user first. snapper can grant that access with an
+ * ACL (ALLOW_GROUPS + SYNC_ACL on each config), which gives the server exactly
+ * the view its user would have of the live system. Only a permission error
+ * falls back to `sudo -n ls`: that covers what an ACL cannot, such as a
+ * received snapshot whose contents keep another user's 0700 directory, and
+ * machines where the ACL has not been set up yet.
+ */
+function listDirEntries(dir: string): string[] | null {
   try {
-    const entries = local ? listLocalDir(configPath) : listBackupDir(configPath);
+    return fs.readdirSync(dir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return null;
+    if (!isPermissionDenied(error)) throw error;
+  }
+  return sudoRead(['ls', '--', dir]).split('\n').filter((e) => e.length > 0);
+}
+
+/** One small text file, read unprivileged first and under `sudo -n cat` on a permission error. */
+function readTextFile(file: string): string {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (!isPermissionDenied(error)) throw error;
+  }
+  return sudoRead(['cat', '--', file]);
+}
+
+/**
+ * Snapshot ids in one config directory, or null if the directory is missing.
+ * Only numeric entries count -- the backup side also holds <id>.info.xml files
+ * and the sync script's state file.
+ */
+function listSnapshotIds(configPath: string): string[] | null {
+  try {
+    const entries = listDirEntries(configPath);
     return entries ? entries.filter((e) => /^\d+$/.test(e.trim())).map((e) => e.trim()) : null;
   } catch (err) {
     // A missing directory is normal (config not set up on this disk) and stays
@@ -105,22 +149,6 @@ function listSnapshotIds(configPath: string, local: boolean): string[] | null {
     }
     return null;
   }
-}
-
-/** Local directories are root-owned 0750, so they are listed through sudo. */
-function listLocalDir(dir: string): string[] {
-  // -n: fail at once if sudo would ask for a password, rather than
-  // blocking the request on a prompt nobody can answer (NHA-101).
-  // stderr is captured (not inherited) so the caller can tell "missing" from "refused".
-  return execFileSync('sudo', ['-n', 'ls', '--', dir], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).split('\n');
-}
-
-/** The backup disk is read directly; null when the directory does not exist. */
-function listBackupDir(dir: string): string[] | null {
-  return fs.existsSync(dir) ? fs.readdirSync(dir) : null;
 }
 
 app.use((req: Request, res: Response, next) => {
@@ -155,19 +183,12 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
       }
       
       const snapshots: any[] = [];
-      let entries: string[] = [];
-      
+      let entries: string[];
+
       try {
-        if (isBackupPath(queryPath)) {
-          // Backup path: normal read
-          if (!fs.existsSync(configPath)) return;
-          entries = fs.readdirSync(configPath);
-        } else {
-          // Local path: always use sudo
-          const output = execFileSync('sudo', ['ls', '--', configPath], { encoding: 'utf8' });
-          entries = output.trim().split('\n').filter(e => e.length > 0);
-        }
+        entries = listDirEntries(configPath) ?? [];
       } catch (e) {
+        console.error(`Could not list ${configPath}:`, e instanceof Error ? e.message : e);
         return;
       }
       
@@ -185,12 +206,7 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
           let date = 'unknown';
           
           try {
-            let xmlContent = '';
-            if (isBackupPath(queryPath)) {
-              xmlContent = fs.readFileSync(infoXmlPath, 'utf8');
-            } else {
-              xmlContent = execFileSync('sudo', ['cat', '--', infoXmlPath], { encoding: 'utf8' });
-            }
+            const xmlContent = readTextFile(infoXmlPath);
             const dateMatch = xmlContent.match(/<date>([^<]+)<\/date>/);
             if (dateMatch) date = dateMatch[1].split('T')[0];
           } catch (e) {}
@@ -349,7 +365,7 @@ function listDirectory(targetPath: string, useSudo: boolean): BrowseItem[] {
   const lsArgs = ['-lA', '--time-style=long-iso', '--', targetPath];
 
   const output = useSudo
-    ? execFileSync('sudo', ['ls', ...lsArgs], { encoding: 'utf8', timeout: 15_000 })
+    ? execFileSync('sudo', ['-n', 'ls', ...lsArgs], { encoding: 'utf8', timeout: 15_000 })
     : execFileSync('ls', lsArgs, { encoding: 'utf8', timeout: 15_000 });
 
   return parseLsOutput(output);
@@ -455,20 +471,20 @@ function isPermissionDenied(error: unknown): boolean {
 }
 
 /**
- * Picks the privilege a snapshot read runs with.
+ * Picks the privilege a snapshot read runs with: the server's own user first,
+ * on both disks, and `sudo -n` only after a permission error.
  *
- * Local snapshot trees are root-owned 0750, so local reads always use sudo.
- * The backup disk is tried unprivileged first -- most of it is readable by the
- * user the server runs as -- but btrfs receive preserves ownership and modes,
- * so a received home snapshot still has /home/gitlab-runner at 0700 owned by
- * gitlab-runner, exactly as on the source. Reads that hit that are retried
- * under sudo instead of failing with 403.
+ * With snapper's ACL in place (ALLOW_GROUPS + SYNC_ACL) the local snapshot
+ * trees are readable by the server's user directly, so nothing needs root.
+ * What an ACL cannot cover still falls through to sudo: btrfs receive
+ * preserves ownership and modes, so a received home snapshot keeps
+ * /home/gitlab-runner at 0700 owned by gitlab-runner, exactly as on the
+ * source. The same applies on a machine where the ACL is not set up yet.
  *
  * `op` must throw on permission failure (see isPermissionDenied) rather than
  * returning an error value, or the retry cannot see it.
  */
-function withSnapshotPrivilege<T>(local: boolean, op: (useSudo: boolean) => T): T {
-  if (local) return op(true);
+function withSnapshotPrivilege<T>(op: (useSudo: boolean) => T): T {
   try {
     return op(false);
   } catch (error) {
@@ -506,12 +522,11 @@ app.get('/api/snapshots/:config/:id/browse', (req: Request, res: Response) => {
   const queryPath = (req.query.path as string) || BACKUP_DISK;
   const subPath = (req.query.subPath as string) || '';
 
-  const local = !isBackupPath(queryPath);
   const basePath = snapshotBasePath(queryPath, config, id);
   let targetPath = basePath;
 
   try {
-    const result = withSnapshotPrivilege(local, (useSudo) => {
+    const result = withSnapshotPrivilege((useSudo) => {
       const contained = containedOrThrow(basePath, subPath, useSudo);
       if (!contained.ok) return contained;
       targetPath = contained.path;
@@ -597,7 +612,7 @@ function looksLikeText(buffer: Buffer): boolean {
 
 function readFileCapped(targetPath: string, useSudo: boolean): Buffer {
   if (useSudo) {
-    return execFileSync('sudo', ['cat', '--', targetPath], {
+    return execFileSync('sudo', ['-n', 'cat', '--', targetPath], {
       maxBuffer: READ_CAP + 1024,
       timeout: 15_000,
     });
@@ -633,14 +648,13 @@ app.get('/api/snapshots/:config/:id/file', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'subPath is required' });
   }
 
-  const local = !isBackupPath(queryPath);
   const basePath = snapshotBasePath(queryPath, config, id);
   let targetPath = basePath;
 
   const name = path.posix.basename(subPath);
 
   try {
-    const result = withSnapshotPrivilege(local, (useSudo) => {
+    const result = withSnapshotPrivilege((useSudo) => {
       const contained = containedOrThrow(basePath, subPath, useSudo);
       if (!contained.ok) return contained;
       targetPath = contained.path;
@@ -737,7 +751,7 @@ app.get('/api/configs', (req: Request, res: Response) => {
 
   for (const config of CONFIG_NAMES) {
     const configPath = local ? localConfigDir(config) : backupConfigDir(queryPath, config);
-    const ids = listSnapshotIds(configPath, local);
+    const ids = listSnapshotIds(configPath);
     if (ids !== null) {
       configs.push({ name: config, path: config, snapshotCount: ids.length });
     }
