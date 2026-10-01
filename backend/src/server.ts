@@ -127,6 +127,20 @@ function readTextFile(file: string): string {
   return sudoRead(['cat', '--', file]);
 }
 
+type ReadError = NodeJS.ErrnoException & { stderr?: Buffer | string };
+
+/** True when a read failed because the path does not exist. `ls` and `cat` report that on stderr, not as an ENOENT code. */
+function isMissingError(error: unknown): boolean {
+  const e = error as ReadError;
+  return e?.code === 'ENOENT' || String(e?.stderr ?? '').includes('No such file or directory');
+}
+
+/** One line for the log: the command's own stderr when there is one, else the error message. */
+function describeError(error: unknown): string {
+  const stderr = String((error as ReadError)?.stderr ?? '').trim();
+  return stderr || (error instanceof Error ? error.message : String(error));
+}
+
 /**
  * Snapshot ids in one config directory, or null if the directory is missing.
  * Only numeric entries count -- the backup side also holds <id>.info.xml files
@@ -140,12 +154,8 @@ function listSnapshotIds(configPath: string): string[] | null {
     // A missing directory is normal (config not set up on this disk) and stays
     // quiet. Anything else -- sudo refusing, a permission error -- must not look
     // the same as "no snapshots", so it is logged before returning null.
-    // (`ls` reports a missing directory on stderr, not as an ENOENT code.)
-    const e = err as NodeJS.ErrnoException & { stderr?: Buffer | string };
-    const missing = e.code === 'ENOENT' || String(e.stderr ?? '').includes('No such file or directory');
-    if (!missing) {
-      const detail = String(e.stderr ?? '').trim() || (err instanceof Error ? err.message : String(err));
-      console.error(`Could not list snapshots in ${configPath}: ${detail}`);
+    if (!isMissingError(err)) {
+      console.error(`Could not list snapshots in ${configPath}: ${describeError(err)}`);
     }
     return null;
   }
@@ -184,6 +194,8 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
       
       const snapshots: any[] = [];
       let entries: string[];
+      let unreadableDates = 0;
+      let firstDateError = '';
 
       try {
         entries = listDirEntries(configPath) ?? [];
@@ -209,8 +221,16 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
             const xmlContent = readTextFile(infoXmlPath);
             const dateMatch = xmlContent.match(/<date>([^<]+)<\/date>/);
             if (dateMatch) date = dateMatch[1].split('T')[0];
-          } catch (e) {}
-          
+          } catch (e) {
+            // A snapshot without info.xml is normal (a received one, say). A
+            // refused read is not: the date would just show as "unknown" and
+            // hide an ACL or sudoers problem.
+            if (!isMissingError(e)) {
+              unreadableDates++;
+              if (!firstDateError) firstDateError = describeError(e);
+            }
+          }
+
           if (isBackupPath(queryPath)) {
             const stat = fs.statSync(snapshotPath);
             if (stat.isDirectory()) {
@@ -221,7 +241,13 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
           }
         } catch (e) {}
       });
-      
+
+      if (unreadableDates > 0) {
+        console.error(
+          `Could not read info.xml for ${unreadableDates} snapshot(s) in ${configPath}: ${firstDateError}`
+        );
+      }
+
       if (snapshots.length > 0) {
         configs[config] = snapshots.sort((a, b) => parseInt(b.id) - parseInt(a.id));
       }
