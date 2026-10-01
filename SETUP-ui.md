@@ -77,6 +77,14 @@ ls /home/.snapshots | head -3
 ls /home/amitp/src/.snapshots | head -3
 ```
 
+To let another user read them, add that user to the group and have them log in
+again, then check that the ACL is in place:
+
+```bash
+sudo usermod -aG snapshots <user>
+getfacl /.snapshots      # expect a "group:snapshots:r-x" line
+```
+
 What an ACL cannot cover (for example a received home snapshot that keeps
 another user's `0700` directory) is still read through `sudo -n`, so keep a
 NOPASSWD rule for `ls`, `cat` and `realpath` if you want those browsable. Without
