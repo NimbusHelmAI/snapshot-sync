@@ -91,6 +91,11 @@ NOPASSWD rule for `ls`, `cat` and `realpath` if you want those browsable. Withou
 one the request fails at once with a permission error instead of waiting on a
 password prompt.
 
+The fallback runs as root, so with that rule the UI can show files your own user
+cannot read. The API listens on 127.0.0.1 only, checks the Host header and keeps
+symlinks inside the snapshot, but if you do not need those paths, leave the
+NOPASSWD rule out and the request is refused instead.
+
 ## Passwordless sudo (required for sync)
 
 Add to sudoers:
