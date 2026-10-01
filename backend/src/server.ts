@@ -90,17 +90,37 @@ function localConfigDir(config: string): string {
  */
 function listSnapshotIds(configPath: string, local: boolean): string[] | null {
   try {
-    const entries = local
-      ? // -n: fail at once if sudo would ask for a password, rather than
-        // blocking the request on a prompt nobody can answer (NHA-101).
-        execFileSync('sudo', ['-n', 'ls', '--', configPath], { encoding: 'utf8' }).split('\n')
-      : fs.existsSync(configPath)
-        ? fs.readdirSync(configPath)
-        : null;
+    const entries = local ? listLocalDir(configPath) : listBackupDir(configPath);
     return entries ? entries.filter((e) => /^\d+$/.test(e.trim())).map((e) => e.trim()) : null;
-  } catch {
+  } catch (err) {
+    // A missing directory is normal (config not set up on this disk) and stays
+    // quiet. Anything else -- sudo refusing, a permission error -- must not look
+    // the same as "no snapshots", so it is logged before returning null.
+    // (`ls` reports a missing directory on stderr, not as an ENOENT code.)
+    const e = err as NodeJS.ErrnoException & { stderr?: Buffer | string };
+    const missing = e.code === 'ENOENT' || String(e.stderr ?? '').includes('No such file or directory');
+    if (!missing) {
+      const detail = String(e.stderr ?? '').trim() || (err instanceof Error ? err.message : String(err));
+      console.error(`Could not list snapshots in ${configPath}: ${detail}`);
+    }
     return null;
   }
+}
+
+/** Local directories are root-owned 0750, so they are listed through sudo. */
+function listLocalDir(dir: string): string[] {
+  // -n: fail at once if sudo would ask for a password, rather than
+  // blocking the request on a prompt nobody can answer (NHA-101).
+  // stderr is captured (not inherited) so the caller can tell "missing" from "refused".
+  return execFileSync('sudo', ['-n', 'ls', '--', dir], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).split('\n');
+}
+
+/** The backup disk is read directly; null when the directory does not exist. */
+function listBackupDir(dir: string): string[] | null {
+  return fs.existsSync(dir) ? fs.readdirSync(dir) : null;
 }
 
 app.use((req: Request, res: Response, next) => {
