@@ -267,6 +267,35 @@ else
   echo "  FAIL  planning order is wrong (1502 at line ${first:-?}, 1490 at line ${second:-?})"; fail=$((fail+1))
 fi
 
+# ==========================================================================
+echo
+echo "TEST 10: --only restricts the run to one config"
+# ==========================================================================
+rm -rf "$W/dest"; mkdir -p "$W/dest"
+run --dry-run --newest-first --max 1 --only src "$W/dest" >"$W/t10.out" 2>&1 || { echo "  script exited $?"; cat "$W/t10.out"; }
+R=$(latest_report)
+check        "report says src only"              "Configs: src only."                 "$R"
+check        "src was planned"                   "## Config: src"                     "$R"
+check_absent "root was skipped"                  "## Config: root"                    "$R"
+check_absent "home was skipped"                  "## Config: home"                    "$R"
+rm -rf "$W/dest"; mkdir -p "$W/dest"
+run --dry-run --max 1 --only=root --only=src "$W/dest" >"$W/t10b.out" 2>&1 || true
+R=$(latest_report)
+check        "two --only: root planned"          "## Config: root"                    "$R"
+check        "two --only: src planned"           "## Config: src"                     "$R"
+check_absent "two --only: home skipped"          "## Config: home"                    "$R"
+if run --dry-run --only nosuch "$W/dest" >"$W/t10c.out" 2>&1; then
+  echo "  FAIL  unknown --only name was accepted"; fail=$((fail+1))
+else
+  echo "  PASS  unknown --only name rejected"; pass=$((pass+1))
+fi
+check        "error lists the known configs"     "known:"                             "$W/t10c.out"
+if run --dry-run "$W/dest" --only >"$W/t10d.out" 2>&1; then
+  echo "  FAIL  --only without a value was accepted"; fail=$((fail+1))
+else
+  echo "  PASS  --only without a value rejected"; pass=$((pass+1))
+fi
+
 echo
 echo "=================================="
 echo "passed: $pass   failed: $fail"
