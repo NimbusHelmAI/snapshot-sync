@@ -2,17 +2,28 @@
 #
 # btrfs_snapshot_sync.sh
 #
-# For a start: transfers the 5 OLDEST not-yet-synced snapshots for each of
-# several snapper configurations (root, home, src) from local Btrfs
-# snapshot directories to an external Btrfs disk, using incremental
-# send/receive where possible. Verifies each transfer and writes a report.
+# Transfers not-yet-synced snapshots for each of several snapper
+# configurations (root, home, src) from local Btrfs snapshot directories to an
+# external Btrfs disk, using incremental send/receive where possible. Verifies
+# each transfer and writes a report. By default it takes the 5 OLDEST per
+# configuration; see --max and --newest-first.
 #
 # Requirements:
 #   - Destination must already be a mounted Btrfs filesystem.
 #   - Run as root.
 #
 # Usage:
-#   sudo ./btrfs_snapshot_sync.sh [--dry-run] [--quick-verify] <dest_root_on_external_disk>
+#   sudo ./btrfs_snapshot_sync.sh [--dry-run] [--quick-verify] [--max N]
+#                                 [--newest-first] <dest_root_on_external_disk>
+#
+# --max N limits the run to N snapshots per configuration (default 5).
+#
+# --newest-first picks the newest not-yet-synced snapshots instead of the
+# oldest, and sends them newest first: the first goes in full, and each older
+# one is sent as an incremental off the one before it. btrfs only needs a
+# read-only parent that exists on both disks, not an older one. Use it for a
+# first run on a disk with no usable backup, so the current state is protected
+# before any history is filled in behind it.
 #
 # --dry-run walks the entire decision path -- which snapshots are due, which
 # parent each incremental would use, what to do about an orphaned landing
@@ -32,22 +43,32 @@ set -euo pipefail
 
 DRY_RUN=0
 QUICK_VERIFY=0
+NEWEST_FIRST=0
+MAX_SNAPSHOTS=5
+USAGE="Usage: $0 [--dry-run] [--quick-verify] [--max N] [--newest-first] <dest_root_on_external_btrfs>"
 POSITIONAL=()
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --dry-run|-n) DRY_RUN=1 ;;
     --quick-verify) QUICK_VERIFY=1 ;;
+    --newest-first) NEWEST_FIRST=1 ;;
+    --max)
+      [[ $# -ge 2 ]] || { echo "ERROR: --max needs a number" >&2; exit 2; }
+      MAX_SNAPSHOTS="$2"; shift ;;
+    --max=*) MAX_SNAPSHOTS="${1#--max=}" ;;
     -h|--help)
-      echo "Usage: $0 [--dry-run] [--quick-verify] <dest_root_on_external_btrfs>"
+      echo "$USAGE"
       exit 0
       ;;
-    -*) echo "ERROR: unknown option: $arg" >&2; exit 2 ;;
-    *)  POSITIONAL+=("$arg") ;;
+    -*) echo "ERROR: unknown option: $1" >&2; exit 2 ;;
+    *)  POSITIONAL+=("$1") ;;
   esac
+  shift
 done
+[[ "$MAX_SNAPSHOTS" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: --max must be a positive whole number, got '${MAX_SNAPSHOTS}'" >&2; exit 2; }
 set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
-DEST_ROOT="${1:?Usage: $0 [--dry-run] [--quick-verify] <dest_root_on_external_btrfs>}"
+DEST_ROOT="${1:?${USAGE}}"
 
 # ---------------------------------------------------------------------
 # EDIT THESE to match your actual snapper snapshot directories.
@@ -59,7 +80,6 @@ declare -A CONFIGS=(
   [src]="/home/amitp/src/.snapshots"
 )
 
-N_OLDEST=5
 
 log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
@@ -121,6 +141,11 @@ fi
   echo "Destination: ${DEST_ROOT}"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "Mode: **DRY RUN** — no data was transferred."
+  fi
+  if [[ "$NEWEST_FIRST" -eq 1 ]]; then
+    echo "Plan: up to ${MAX_SNAPSHOTS} snapshot(s) per config, newest first."
+  else
+    echo "Plan: up to ${MAX_SNAPSHOTS} snapshot(s) per config, oldest first."
   fi
   echo "Logs: ${LOG_DIR}"
   echo
@@ -466,8 +491,12 @@ for cfg_name in "${!CONFIGS[@]}"; do
   # directory, so deal with it before planning any transfers.
   reclaim_orphan "$cfg_dest_root" "$src_root" "$cfg_name"
 
-  # Oldest-first, read-only subvols only.
-  mapfile -t all_snaps < <(find "$src_root" -mindepth 2 -maxdepth 2 -type d -name snapshot | sort -V)
+  # Read-only subvols only, oldest first unless --newest-first. With
+  # --newest-first the list is sent in that order too: the newest in full, then
+  # each older one as an incremental off the one just sent (last_synced below).
+  sort_flags=-V
+  [[ "$NEWEST_FIRST" -eq 1 ]] && sort_flags=-rV
+  mapfile -t all_snaps < <(find "$src_root" -mindepth 2 -maxdepth 2 -type d -name snapshot | sort "$sort_flags")
 
   to_send=()
   for s in "${all_snaps[@]}"; do
@@ -477,7 +506,7 @@ for cfg_name in "${!CONFIGS[@]}"; do
     fi
     is_ro_subvol "$s" || continue
     to_send+=("$s")
-    [[ ${#to_send[@]} -ge $N_OLDEST ]] && break
+    [[ ${#to_send[@]} -ge $MAX_SNAPSHOTS ]] && break
   done
 
   if [[ ${#to_send[@]} -eq 0 ]]; then

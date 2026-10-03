@@ -4,7 +4,7 @@
 #
 # Exercises btrfs_snapshot_sync.sh --dry-run against a fake snapshot tree with
 # stubbed btrfs tooling. Covers the decision logic -- snapshot ordering, the
-# N_OLDEST limit, incremental parent selection, orphan recovery, dry-run purity
+# --max limit, incremental parent selection, orphan recovery, dry-run purity
 # and argument handling -- without a btrfs filesystem, root privileges or a
 # real transfer.
 #
@@ -115,7 +115,7 @@ check "report marked as dry run"            "**DRY RUN**"              "$R"
 check "oldest root snapshot planned first"  "**1362**: would send"     "$R"
 check "first send is full"                  "would send (full)"        "$R"
 check "later sends are incremental"         "would send (incremental)" "$R"
-check "respects N_OLDEST=5"                 "**1454**: would send"     "$R"
+check "default limit is 5 per config"               "**1454**: would send"     "$R"
 check_absent "does not plan a 6th snapshot" "**1468**: would send"     "$R"
 stray=()
 for entry in "$W/dest"/*; do
@@ -217,6 +217,55 @@ else
   echo "  FAIL  --quick-verify rejected"; cat "$W/t7.out"; fail=$((fail+1))
 fi
 check "--help documents --quick-verify" "--quick-verify" "$W/t5b.out"
+
+# ==========================================================================
+echo
+echo "TEST 8: --max limits the run"
+# ==========================================================================
+rm -rf "$W/dest"; mkdir -p "$W/dest"
+run --dry-run --max 2 "$W/dest" >"$W/t8.out" 2>&1 || { echo "  script exited $?"; cat "$W/t8.out"; }
+R=$(latest_report)
+check        "plan says up to 2, oldest first"  "up to 2 snapshot(s) per config, oldest first" "$R"
+check        "root: first snapshot planned"     "**1362**: would send"   "$R"
+check        "root: second snapshot planned"    "**1385**: would send"   "$R"
+check_absent "root: third snapshot not planned" "**1432**: would send"   "$R"
+run --dry-run --max=1 "$W/dest" >"$W/t8b.out" 2>&1 || true
+R=$(latest_report)
+check_absent "--max=1 form: second snapshot not planned" "**1385**: would send" "$R"
+for bad in 0 -1 abc 2.5; do
+  if run --dry-run --max "$bad" "$W/dest" >"$W/t8c.out" 2>&1; then
+    echo "  FAIL  --max $bad was accepted"; fail=$((fail+1))
+  else
+    echo "  PASS  --max $bad rejected"; pass=$((pass+1))
+  fi
+done
+if run --dry-run "$W/dest" --max >"$W/t8d.out" 2>&1; then
+  echo "  FAIL  --max without a value was accepted"; fail=$((fail+1))
+else
+  echo "  PASS  --max without a value rejected"; pass=$((pass+1))
+fi
+
+# ==========================================================================
+echo
+echo "TEST 9: --newest-first sends the newest in full, then chains backwards"
+# ==========================================================================
+rm -rf "$W/dest"; mkdir -p "$W/dest"
+run --dry-run --newest-first --max 3 "$W/dest" >"$W/t9.out" 2>&1 || { echo "  script exited $?"; cat "$W/t9.out"; }
+R=$(latest_report)
+check        "plan says newest first"            "up to 3 snapshot(s) per config, newest first" "$R"
+check        "root: newest planned, in full"     "**1502**: would send (full)"        "$R"
+check        "root: next older is incremental"   "**1490**: would send (incremental)" "$R"
+check        "root: third is incremental"        "**1468**: would send (incremental)" "$R"
+check_absent "root: oldest not planned"          "**1362**: would send"               "$R"
+check        "home: newest planned, in full"     "**754**: would send (full)"         "$R"
+# order within the report: newest before the older ones it chains from
+first=$(grep -n '\*\*1502\*\*: would send' "$R" | head -1 | cut -d: -f1)
+second=$(grep -n '\*\*1490\*\*: would send' "$R" | head -1 | cut -d: -f1)
+if [[ -n "$first" && -n "$second" && "$first" -lt "$second" ]]; then
+  echo "  PASS  newest is planned before the older snapshots"; pass=$((pass+1))
+else
+  echo "  FAIL  planning order is wrong (1502 at line ${first:-?}, 1490 at line ${second:-?})"; fail=$((fail+1))
+fi
 
 echo
 echo "=================================="
