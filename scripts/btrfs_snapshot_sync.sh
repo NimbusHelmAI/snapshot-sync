@@ -14,9 +14,13 @@
 #
 # Usage:
 #   sudo ./btrfs_snapshot_sync.sh [--dry-run] [--quick-verify] [--max N]
-#                                 [--newest-first] <dest_root_on_external_disk>
+#                                 [--newest-first] [--only NAME]...
+#                                 <dest_root_on_external_disk>
 #
 # --max N limits the run to N snapshots per configuration (default 5).
+#
+# --only NAME restricts the run to one configuration (root, home or src); repeat
+# it to pick several. Use it for a small first real run, e.g. --only src.
 #
 # --newest-first picks the newest not-yet-synced snapshots instead of the
 # oldest, and sends them newest first: the first goes in full, and each older
@@ -45,7 +49,8 @@ DRY_RUN=0
 QUICK_VERIFY=0
 NEWEST_FIRST=0
 MAX_SNAPSHOTS=5
-USAGE="Usage: $0 [--dry-run] [--quick-verify] [--max N] [--newest-first] <dest_root_on_external_btrfs>"
+ONLY=()
+USAGE="Usage: $0 [--dry-run] [--quick-verify] [--max N] [--newest-first] [--only NAME]... <dest_root_on_external_btrfs>"
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,6 +61,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "ERROR: --max needs a number" >&2; exit 2; }
       MAX_SNAPSHOTS="$2"; shift ;;
     --max=*) MAX_SNAPSHOTS="${1#--max=}" ;;
+    --only)
+      [[ $# -ge 2 ]] || { echo "ERROR: --only needs a config name" >&2; exit 2; }
+      ONLY+=("$2"); shift ;;
+    --only=*) ONLY+=("${1#--only=}") ;;
     -h|--help)
       echo "$USAGE"
       exit 0
@@ -80,6 +89,9 @@ declare -A CONFIGS=(
   [src]="/home/amitp/src/.snapshots"
 )
 
+for o in "${ONLY[@]+"${ONLY[@]}"}"; do
+  [[ -n "${CONFIGS[$o]+x}" ]] || { echo "ERROR: --only '${o}' is not a known config (known: ${!CONFIGS[*]})" >&2; exit 2; }
+done
 
 log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
@@ -146,6 +158,9 @@ fi
     echo "Plan: up to ${MAX_SNAPSHOTS} snapshot(s) per config, newest first."
   else
     echo "Plan: up to ${MAX_SNAPSHOTS} snapshot(s) per config, oldest first."
+  fi
+  if [[ ${#ONLY[@]} -gt 0 ]]; then
+    echo "Configs: ${ONLY[*]} only."
   fi
   echo "Logs: ${LOG_DIR}"
   echo
@@ -469,6 +484,9 @@ TOTAL_SENT=0
 TOTAL_FAILED=0
 
 for cfg_name in "${!CONFIGS[@]}"; do
+  if [[ ${#ONLY[@]} -gt 0 ]] && ! printf '%s\n' "${ONLY[@]}" | grep -qxF -- "$cfg_name"; then
+    continue
+  fi
   src_root="${CONFIGS[$cfg_name]}"
   cfg_dest_root="${DEST_ROOT}/${SNAPSHOT_SUBDIR}/${cfg_name}"
   # A dry run must leave the destination exactly as it found it.
