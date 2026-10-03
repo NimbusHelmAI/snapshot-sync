@@ -296,6 +296,28 @@ else
   echo "  PASS  --only without a value rejected"; pass=$((pass+1))
 fi
 
+# ==========================================================================
+echo
+echo "TEST 11: sizes are shown in GiB from 1 GiB up"
+# ==========================================================================
+# Pull the helper out of the script and exercise it directly.
+eval "$(sed -n '/^human_bytes()/,/^}/p' "$W/script.sh")"
+hb_check() {  # hb_check <bytes> <expected>
+  got=$(human_bytes "$1")
+  if [[ "$got" == "$2" ]]; then
+    echo "  PASS  $1 bytes -> $2"; pass=$((pass+1))
+  else
+    echo "  FAIL  $1 bytes -> '$got', expected '$2'"; fail=$((fail+1))
+  fi
+}
+hb_check 0              "0 MiB"
+hb_check 524288000      "500 MiB"
+hb_check 1073741823     "1023 MiB"
+hb_check 1073741824     "1.0 GiB"
+hb_check 1665138688     "1.6 GiB"
+hb_check 39124738048    "36.4 GiB"
+hb_check 289910292480   "270.0 GiB"
+
 echo
 echo "=================================="
 echo "passed: $pass   failed: $fail"

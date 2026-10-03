@@ -182,6 +182,15 @@ get_size_bytes() {
   du -sb --apparent-size "$1" 2>/dev/null | awk '{print $1}'
 }
 
+# Bytes in a form a person can read: GiB with one decimal from 1 GiB up,
+# whole MiB below that.
+human_bytes() {
+  awk -v b="${1:-0}" 'BEGIN {
+    if (b >= 1073741824) printf "%.1f GiB", b / 1073741824
+    else                 printf "%d MiB", b / 1048576
+  }'
+}
+
 get_file_count() {
   find "$1" -xdev | wc -l
 }
@@ -230,7 +239,7 @@ run_send_receive() {
     # total for the progress bar.
     est_size=$(get_size_bytes "$src")
     pv_flags=(-pterb -s "$est_size")
-    log "  estimated size: $((est_size / 1024 / 1024)) MiB (full send: apparent size of the source subvolume)"
+    log "  estimated size: $(human_bytes "$est_size") (full send: apparent size of the source subvolume)"
   else
     # An incremental send transfers only what changed since the parent, which
     # is not known in advance. The size of the whole subvolume used to be given
@@ -583,7 +592,7 @@ for cfg_name in "${!CONFIGS[@]}"; do
       echo "- **${snap_id}** (${send_mode} send, ${elapsed}s):" >> "$REPORT_FILE"
     else
       size_bytes=$(get_size_bytes "$dest_target")
-      echo "- **${snap_id}** (${send_mode} send, ${elapsed}s, $((size_bytes / 1024 / 1024)) MiB):" >> "$REPORT_FILE"
+      echo "- **${snap_id}** (${send_mode} send, ${elapsed}s, $(human_bytes "$size_bytes")):" >> "$REPORT_FILE"
     fi
 
     if sanity_check "$snap" "$dest_target" "$cfg_name/${snap_id}"; then
