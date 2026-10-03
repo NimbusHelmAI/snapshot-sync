@@ -87,18 +87,18 @@ sed -e "s#\[root\]=\"/.snapshots\"#[root]=\"${W}/root-snaps\"#" \
     "$SCRIPT_SRC" > "$W/script.sh"
 chmod +x "$W/script.sh"
 
-run() { PATH="$W/bin:$PATH" "$W/script.sh" "$@"; }
+run() { SYNC_LOCK_FILE="$W/sync.lock" PATH="$W/bin:$PATH" "$W/script.sh" "$@"; }
 
 pass=0; fail=0
 check() {  # check <description> <expected-substring> <file>
-  if grep -qF "$2" "$3"; then
+  if grep -qF -- "$2" "$3"; then
     echo "  PASS  $1"; pass=$((pass+1))
   else
     echo "  FAIL  $1"; echo "        expected to find: $2"; fail=$((fail+1))
   fi
 }
 check_absent() {
-  if grep -qF "$2" "$3"; then
+  if grep -qF -- "$2" "$3"; then
     echo "  FAIL  $1"; echo "        did not expect: $2"; fail=$((fail+1))
   else
     echo "  PASS  $1"; pass=$((pass+1))
@@ -128,6 +128,14 @@ if [[ ${#stray[@]} -eq 0 ]]; then
 else
   echo "  FAIL  dry run created: ${stray[*]}"; fail=$((fail+1))
 fi
+
+est=$(grep -c "estimated size" "$W/t1.out" || true)
+if [[ "$est" -eq 3 ]]; then
+  echo "  PASS  size estimated only for the 3 full sends (one per config)"; pass=$((pass+1))
+else
+  echo "  FAIL  expected 3 size estimates (full sends only), found $est"; fail=$((fail+1))
+fi
+check "incremental sends show no percentage" "size of the delta is not known" "$W/t1.out"
 
 # ==========================================================================
 echo
@@ -179,6 +187,36 @@ if run --help >"$W/t5b.out" 2>&1 && grep -q "dry-run" "$W/t5b.out"; then
 else
   echo "  FAIL  --help broken"; fail=$((fail+1))
 fi
+
+# ==========================================================================
+echo
+echo "TEST 6: only one sync at a time"
+# ==========================================================================
+( exec 9>"$W/sync.lock"; flock -n 9; sleep 4 ) &
+HOLDER=$!
+sleep 1
+if run --dry-run "$W/dest" >"$W/t6.out" 2>&1; then
+  echo "  FAIL  second run was allowed while the lock was held"; fail=$((fail+1))
+else
+  check "second run refused while the lock is held" "another sync is already running" "$W/t6.out"
+fi
+wait "$HOLDER" 2>/dev/null || true
+if run --dry-run "$W/dest" >"$W/t6b.out" 2>&1; then
+  echo "  PASS  lock released once the first run ended"; pass=$((pass+1))
+else
+  echo "  FAIL  lock still held after the first run ended"; cat "$W/t6b.out"; fail=$((fail+1))
+fi
+
+# ==========================================================================
+echo
+echo "TEST 7: --quick-verify"
+# ==========================================================================
+if run --dry-run --quick-verify "$W/dest" >"$W/t7.out" 2>&1; then
+  echo "  PASS  --quick-verify accepted"; pass=$((pass+1))
+else
+  echo "  FAIL  --quick-verify rejected"; cat "$W/t7.out"; fail=$((fail+1))
+fi
+check "--help documents --quick-verify" "--quick-verify" "$W/t5b.out"
 
 echo
 echo "=================================="

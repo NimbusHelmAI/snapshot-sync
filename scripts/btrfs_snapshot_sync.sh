@@ -12,7 +12,7 @@
 #   - Run as root.
 #
 # Usage:
-#   sudo ./btrfs_snapshot_sync.sh [--dry-run] <dest_root_on_external_disk>
+#   sudo ./btrfs_snapshot_sync.sh [--dry-run] [--quick-verify] <dest_root_on_external_disk>
 #
 # --dry-run walks the entire decision path -- which snapshots are due, which
 # parent each incremental would use, what to do about an orphaned landing
@@ -20,15 +20,25 @@
 # takes hours, so this is the only practical way to verify a change to this
 # script before trusting it with a transfer.
 #
+# --quick-verify skips the advisory file-count and apparent-size comparisons
+# after each transfer. They never decide pass/fail, but each one walks the whole
+# snapshot on both disks, which on a large home snapshot is a lot of reading.
+# The decisive checks (read-only destination, Received UUID) always run.
+#
+# Only one sync runs at a time per machine (flock on SYNC_LOCK_FILE, default
+# /run/lock/btrfs_snapshot_sync.lock); a second one stops at once.
+#
 set -euo pipefail
 
 DRY_RUN=0
+QUICK_VERIFY=0
 POSITIONAL=()
 for arg in "$@"; do
   case "$arg" in
     --dry-run|-n) DRY_RUN=1 ;;
+    --quick-verify) QUICK_VERIFY=1 ;;
     -h|--help)
-      echo "Usage: $0 [--dry-run] <dest_root_on_external_btrfs>"
+      echo "Usage: $0 [--dry-run] [--quick-verify] <dest_root_on_external_btrfs>"
       exit 0
       ;;
     -*) echo "ERROR: unknown option: $arg" >&2; exit 2 ;;
@@ -37,7 +47,7 @@ for arg in "$@"; do
 done
 set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
-DEST_ROOT="${1:?Usage: $0 [--dry-run] <dest_root_on_external_btrfs>}"
+DEST_ROOT="${1:?Usage: $0 [--dry-run] [--quick-verify] <dest_root_on_external_btrfs>}"
 
 # ---------------------------------------------------------------------
 # EDIT THESE to match your actual snapper snapshot directories.
@@ -56,7 +66,18 @@ die()  { echo "ERROR: $*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "must run as root (sudo)."
 command -v btrfs >/dev/null || die "btrfs-progs not installed."
+command -v flock >/dev/null || die "flock (util-linux) not installed."
 [[ -d "$DEST_ROOT" ]] || die "destination '$DEST_ROOT' does not exist (mount external disk first)."
+
+# One sync at a time. Two runs into the same destination -- a manual one and one
+# started from the UI, say -- would race on the landing name "snapshot" and on
+# the state file. The lock is per machine, not per destination, and lives
+# outside the destination so a dry run still leaves the disk untouched. It is
+# held on fd 9 until this process exits and released by the kernel even if the
+# script is killed.
+LOCK_FILE="${SYNC_LOCK_FILE:-/run/lock/btrfs_snapshot_sync.lock}"
+exec 9>"$LOCK_FILE" || die "cannot open lock file '${LOCK_FILE}'."
+flock -n 9 || die "another sync is already running (lock: ${LOCK_FILE})."
 
 HAVE_PV=1
 if ! command -v pv >/dev/null; then
@@ -163,8 +184,22 @@ emit_log_tail() {
 run_send_receive() {
   local parent="$1" src="$2" dest="$3" label="$4"
   local est_size send_log recv_log rc
-  est_size=$(get_size_bytes "$src")
-  log "  estimated size: $((est_size / 1024 / 1024)) MiB (source subvolume apparent size)"
+  local -a pv_flags
+  if [[ -z "$parent" ]]; then
+    # A full send transfers the whole subvolume, so its apparent size is a fair
+    # total for the progress bar.
+    est_size=$(get_size_bytes "$src")
+    pv_flags=(-pterb -s "$est_size")
+    log "  estimated size: $((est_size / 1024 / 1024)) MiB (full send: apparent size of the source subvolume)"
+  else
+    # An incremental send transfers only what changed since the parent, which
+    # is not known in advance. The size of the whole subvolume used to be given
+    # here as the total, so every incremental showed a meaningless percentage
+    # and the dry run claimed 313 GiB for a home incremental. Show elapsed time,
+    # throughput and bytes so far instead, and skip walking the whole subvolume.
+    pv_flags=(-trb)
+    log "  incremental send: size of the delta is not known in advance, so no percentage."
+  fi
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     if [[ -n "$parent" ]]; then
@@ -183,12 +218,12 @@ run_send_receive() {
     if [[ -n "$parent" ]]; then
       log "  running: btrfs send -v -p <parent> | pv | btrfs receive -v"
       btrfs send -v -p "$parent" "$src" 2>"$send_log" \
-        | pv -pterb -s "$est_size" \
+        | pv "${pv_flags[@]}" \
         | btrfs receive -v "$dest" 2>"$recv_log" || rc=$?
     else
       log "  running: btrfs send -v | pv | btrfs receive -v"
       btrfs send -v "$src" 2>"$send_log" \
-        | pv -pterb -s "$est_size" \
+        | pv "${pv_flags[@]}" \
         | btrfs receive -v "$dest" 2>"$recv_log" || rc=$?
     fi
   else
@@ -322,6 +357,13 @@ sanity_check() {
   # The Received UUID is what btrfs itself stamps only once receive has
   # completed successfully. That is the proof. These two are a smell test.
   # ---------------------------------------------------------------------
+
+  # --quick-verify: each of these walks the whole snapshot on both disks, and
+  # neither decides pass/fail, so they can be skipped.
+  if [[ "$QUICK_VERIFY" -eq 1 ]]; then
+    echo "    - [SKIP] file count and size not compared (--quick-verify)" >> "$REPORT_FILE"
+    return $((1 - pass))
+  fi
 
   # 3. File count (advisory).
   local src_count dest_count
@@ -490,8 +532,12 @@ for cfg_name in "${!CONFIGS[@]}"; do
     fi
 
     elapsed=$(( $(date +%s) - start_ts ))
-    size_bytes=$(get_size_bytes "$dest_target")
-    echo "- **${snap_id}** (${send_mode} send, ${elapsed}s, $((size_bytes / 1024 / 1024)) MiB):" >> "$REPORT_FILE"
+    if [[ "$QUICK_VERIFY" -eq 1 ]]; then
+      echo "- **${snap_id}** (${send_mode} send, ${elapsed}s):" >> "$REPORT_FILE"
+    else
+      size_bytes=$(get_size_bytes "$dest_target")
+      echo "- **${snap_id}** (${send_mode} send, ${elapsed}s, $((size_bytes / 1024 / 1024)) MiB):" >> "$REPORT_FILE"
+    fi
 
     if sanity_check "$snap" "$dest_target" "$cfg_name/${snap_id}"; then
       log "[${cfg_name}] ${snap_id}: OK"
