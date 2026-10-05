@@ -1,3 +1,4 @@
+import { SnapshotsTable } from './SnapshotsTable';
 /**
  * SnapshotComparison Component
  * 
@@ -676,25 +677,22 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
               <div className={styles.snapshotList}>
                 {snapshots ? (
                   snapshots.length > 0 ? (
-                    <ul className={styles.snapshotItems}>
-                      {snapshots.map((snap: any) => {
-                        const isSelected = selectedSnapshots.has(
-                          snapshotKey(disk.path, cfg.name, snap.id)
-                        );
-                        return (
-                          <li
-                            key={snap.id}
-                            className={`${styles.snapshotItem} ${isSelected ? styles.snapshotItemSelected : ''}`}
-                            onClick={() => onToggleSnapshot(disk.path, cfg.name, snap.id)}
-                          >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                              <span>📸 {snap.id}</span>
-                              <small style={{ fontSize: '0.75em', opacity: 1, color: '#666' }}>{snap.date || 'unknown'}</small>
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
+                    <SnapshotsTable
+                      snapshots={snapshots}
+                      selectedIds={new Set(selectedIds)}
+                      onSelectChange={(snapId, selected) => {
+                        if (selected) {
+                          selectedSnapshots.add(snapshotKey(disk.path, cfg.name, snapId));
+                        } else {
+                          selectedSnapshots.delete(snapshotKey(disk.path, cfg.name, snapId));
+                        }
+                        onToggleSnapshot(disk.path, cfg.name, snapId);
+                      }}
+                      onContextMenu={(snapId, _x, _y) => {
+                        // TODO: Handle context menu
+                        onBrowse(disk.path, cfg.name, snapId); // TODO: pass x,y for context menu
+                      }}
+                    />
                   ) : (
                     <p className={styles.snapshotPlaceholder}>No snapshots found</p>
                   )

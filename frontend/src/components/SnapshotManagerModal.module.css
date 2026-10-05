@@ -1,0 +1,258 @@
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+  padding: 16px;
+}
+
+.modalContent {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  max-width: 900px;
+  width: 100%;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 20px;
+  border-bottom: 1px solid #e0e0e0;
+  flex-shrink: 0;
+}
+
+.headerTitle h2 {
+  margin: 0 0 8px 0;
+  font-size: 1.4rem;
+  color: #333;
+}
+
+.configInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.configName {
+  font-weight: 500;
+  color: #333;
+  font-family: monospace;
+}
+
+.configPath {
+  font-size: 0.85rem;
+  color: #999;
+}
+
+.closeBtn {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: #666;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+  margin-left: 16px;
+}
+
+.closeBtn:hover {
+  background-color: #f0f0f0;
+  color: #333;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 20px;
+  background: #f9f9f9;
+  border-bottom: 1px solid #e0e0e0;
+  flex-shrink: 0;
+}
+
+.toolbarLeft {
+  font-size: 0.95rem;
+  color: #666;
+}
+
+.count {
+  font-weight: 500;
+}
+
+.toolbarRight {
+  display: flex;
+  gap: 8px;
+}
+
+.toolbarBtn {
+  padding: 8px 16px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #333;
+  transition: all 0.2s;
+}
+
+.toolbarBtn:hover:not(:disabled) {
+  background: #f0f0f0;
+  border-color: #bbb;
+}
+
+.toolbarBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toolbarBtn.danger:not(:disabled) {
+  color: #dc3545;
+  border-color: #dc3545;
+}
+
+.toolbarBtn.danger:hover:not(:disabled) {
+  background: #fff5f5;
+}
+
+.policyPanel {
+  padding: 16px 20px;
+  background: #f0f7ff;
+  border-bottom: 1px solid #bee5eb;
+  flex-shrink: 0;
+}
+
+.policyPanel h3 {
+  margin: 0 0 12px 0;
+  font-size: 1.05rem;
+  color: #0c5460;
+}
+
+.policyContent p {
+  margin: 0 0 8px 0;
+  color: #0c5460;
+  font-size: 0.95rem;
+}
+
+.policyDetails {
+  margin: 8px 0 12px 0;
+  padding-left: 20px;
+  color: #0c5460;
+  font-size: 0.95rem;
+}
+
+.policyDetails li {
+  margin-bottom: 4px;
+}
+
+.policyNote {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #0c5460;
+  font-style: italic;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 3px;
+}
+
+.message {
+  padding: 12px 20px;
+  background: #e7f3ff;
+  color: #0066cc;
+  border-bottom: 1px solid #b3d9ff;
+  font-size: 0.95rem;
+  flex-shrink: 0;
+}
+
+.tableWrapper {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 20px;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid #e0e0e0;
+  flex-shrink: 0;
+  background: #fafafa;
+}
+
+.closeFooterBtn {
+  padding: 10px 20px;
+  background: #e9ecef;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 500;
+  color: #333;
+  transition: all 0.2s;
+}
+
+.closeFooterBtn:hover {
+  background: #dee2e6;
+}
+
+.closeFooterBtn:active {
+  background: #c6d3dc;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .modalContent {
+    max-height: 95vh;
+    max-width: 95vw;
+  }
+
+  .toolbar {
+    flex-direction: column;
+    gap: 12px;
+    align-items: stretch;
+  }
+
+  .toolbarLeft {
+    width: 100%;
+  }
+
+  .toolbarRight {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .toolbarBtn {
+    width: 100%;
+  }
+
+  .header {
+    flex-direction: column;
+  }
+
+  .closeBtn {
+    margin-left: 0;
+    align-self: flex-end;
+  }
+}
