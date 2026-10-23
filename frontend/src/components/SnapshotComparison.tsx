@@ -690,7 +690,7 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                       }}
                       onContextMenu={(snapId, _x, _y) => {
                         // TODO: Handle context menu
-                        onBrowse(disk.path, cfg.name, snapId); // TODO: pass x,y for context menu
+                        onBrowse(cfg.name, snapId, disk.path); // TODO: pass x,y for context menu
                       }}
                     />
                   ) : (
