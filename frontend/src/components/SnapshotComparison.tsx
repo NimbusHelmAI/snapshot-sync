@@ -9,7 +9,7 @@ import { SnapshotsTable } from './SnapshotsTable';
  */
 
 import React, { useState, useEffect } from 'react';
-import { loadConfigs, syncSnapshots, loadSnapshots } from '../utils/snapshotApi';
+import { loadConfigs, syncSnapshots, loadSnapshots, loadBackupPath, saveBackupPath } from '../utils/snapshotApi';
 import { browseSnapshot, previewFile, formatSize, formatModified } from '../utils/snapshotApi';
 import type { BrowseItem, BrowseTarget, FilePreview } from '../types';
 import styles from './SnapshotComparison.module.css';
@@ -75,7 +75,7 @@ const settingsKey = 'snapshot-comparison-settings';
 
 const defaultSettings: AppSettings = {
   localPath: '/',
-  externalPath: '/run/media/amitp/Backup',
+  externalPath: '',
 };
 
 export const SnapshotComparison: React.FC = () => {
@@ -156,8 +156,15 @@ export const SnapshotComparison: React.FC = () => {
     }
   };
 
+  // The backup path comes from the server. The effect below refreshes the configs.
   useEffect(() => {
-    refreshConfigs();
+    loadBackupPath()
+      .then((backupDisk) => {
+        if (!backupDisk) return;
+        setRight((prev) => ({ ...prev, path: backupDisk }));
+        setSettings((prev) => ({ ...prev, externalPath: backupDisk }));
+      })
+      .catch((err) => console.error('Could not load backup path:', err));
   }, []);
 
   useEffect(() => {
@@ -170,7 +177,13 @@ export const SnapshotComparison: React.FC = () => {
     setRight(temp);
   };
 
-  const handleSettingsSave = (newSettings: AppSettings) => {
+  const handleSettingsSave = async (newSettings: AppSettings) => {
+    try {
+      await saveBackupPath(newSettings.externalPath);
+    } catch (err) {
+      setError(`Could not save backup path: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     saveSettings(newSettings);
     setLeft((prev) => ({ ...prev, path: newSettings.localPath }));
     setRight((prev) => ({ ...prev, path: newSettings.externalPath }));
@@ -772,7 +785,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
             type="text"
             value={externalPath}
             onChange={(e) => setExternalPath(e.target.value)}
-            placeholder="/run/media/amitp/Backup"
+            placeholder="/mnt/Backup"
           />
         </div>
         <div className={styles.settingsActions}>

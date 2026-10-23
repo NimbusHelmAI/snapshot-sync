@@ -8,6 +8,26 @@ import {
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || '';
 
+// The backup path is stored on the server (config.yml), so every browser sees the same value.
+export async function loadBackupPath(): Promise<string | null> {
+  const res = await fetch(`${apiBaseUrl}/api/settings`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return data.backupDisk || null;
+}
+
+export async function saveBackupPath(backupDisk: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl}/api/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ backupDisk }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+}
+
 /**
  * Throws when a response is not ok, preferring the API's own `{ error }`
  * message over the bare status text.

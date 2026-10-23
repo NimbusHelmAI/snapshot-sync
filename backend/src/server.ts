@@ -6,7 +6,43 @@ import cors from 'cors';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3001);
-const BACKUP_DISK = process.env.BACKUP_DISK || '/run/media/amitp/Backup';
+import * as nodeFs from 'fs';
+import * as nodePath from 'path';
+import * as yaml from 'js-yaml';
+
+// Settings live in config.yml at the project root. Backup path order:
+// config.yml, then the BACKUP_DISK environment variable, then the old default.
+const SETTINGS_FILE = process.env.CONFIG_FILE || nodePath.resolve(__dirname, '../../config.yml');
+
+interface Settings {
+  backupDisk?: string;
+}
+
+function readSettings(): Settings {
+  try {
+    if (!nodeFs.existsSync(SETTINGS_FILE)) return {};
+    return (yaml.load(nodeFs.readFileSync(SETTINGS_FILE, 'utf8')) as Settings) || {};
+  } catch (err) {
+    console.error('Could not read config.yml:', err);
+    return {};
+  }
+}
+
+// A path counts as mounted only if its device differs from its parent folder's.
+function isMountPoint(p: string): boolean {
+  try {
+    return nodeFs.statSync(p).dev !== nodeFs.statSync(nodePath.dirname(p)).dev;
+  } catch {
+    return false;
+  }
+}
+
+function writeSettings(settings: Settings): void {
+  nodeFs.writeFileSync(SETTINGS_FILE, yaml.dump(settings));
+}
+
+let BACKUP_DISK: string =
+  readSettings().backupDisk || '';
 
 // ---------------------------------------------------------------------------
 // Network exposure
@@ -170,6 +206,18 @@ app.use((req: Request, res: Response, next) => {
 });
 app.use(cors({ origin: CORS_ORIGINS }));
 app.use(express.json());
+
+// Backup routes need a configured backup path. Without one, refuse instead of
+// falling back to a hardcoded disk.
+app.use('/api', (req: Request, res: Response, next) => {
+  if (req.path.startsWith('/settings')) return next();
+  const p = typeof req.query.path === 'string' ? req.query.path : '';
+  const wantsBackup = !p || p === BACKUP_DISK || p.includes('Backup');
+  if (wantsBackup && !BACKUP_DISK) {
+    return res.status(409).json({ error: 'Backup path not set. Set it in Settings.' });
+  }
+  next();
+});
 
 // Health check
 app.get('/api/health', (req: Request, res: Response) => {
@@ -770,6 +818,20 @@ function formatBytes(bytes: number): string {
 // the local path '/' onto the backup disk, so the Local panel showed the
 // backup's configs and snapshot counts -- and showed nothing at all while the
 // backup disk was unmounted.
+app.get('/api/settings', (_req: Request, res: Response) => {
+  res.json({ backupDisk: BACKUP_DISK });
+});
+
+app.put('/api/settings', (req: Request, res: Response) => {
+  const backupDisk = typeof req.body?.backupDisk === 'string' ? req.body.backupDisk.trim() : '';
+  if (!nodePath.isAbsolute(backupDisk) || !isMountPoint(backupDisk)) {
+    return res.status(400).json({ error: 'backupDisk must be an existing absolute path' });
+  }
+  writeSettings({ ...readSettings(), backupDisk });
+  BACKUP_DISK = backupDisk;
+  res.json({ backupDisk });
+});
+
 app.get('/api/configs', (req: Request, res: Response) => {
   const queryPath = (req.query.path as string) || '/';
   const local = !isBackupPath(queryPath);
