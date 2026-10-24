@@ -1,0 +1,52 @@
+# Development: the API and the frontend both run in containers with live reload.
+# Snapshot directories and the backup disk are mounted read-only at their host
+# paths, so the API sees the same files and symlink targets as on the host.
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: builder
+    command: npm run dev
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      - PORT=3001
+      # Inside the container the API must listen on all interfaces; the port is
+      # published on the host's loopback only (see ports above).
+      - HOST=0.0.0.0
+      # The web container's proxy sends Host: api:3001.
+      - ALLOWED_HOSTS=api
+      # Must equal the backup path the browser sends (Settings -> External
+      # backup path).
+      - BACKUP_DISK=/mnt/Backup
+      - SCRIPTS_DIR=/scripts
+    volumes:
+      - ./backend/src:/app/src
+      - /.snapshots:/.snapshots:ro
+      - /home/.snapshots:/home/.snapshots:ro
+      - /home/amitp/src/.snapshots:/home/amitp/src/.snapshots:ro
+      - /mnt/Backup:/mnt/Backup:ro
+      - ./scripts:/scripts:ro
+    restart: "no"
+    security_opt:
+      - label=disable
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # Vite proxies /api to the API container when this is set.
+      - DOCKER=true
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+    depends_on:
+      - api
+    restart: "no"
+    security_opt:
+      - label=disable
