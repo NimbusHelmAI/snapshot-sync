@@ -17,12 +17,14 @@ services:
       - HOST=0.0.0.0
       # The web container's proxy sends Host: api:3001.
       - ALLOWED_HOSTS=api
-      # Must equal the backup path the browser sends (Settings -> External
-      # backup path).
+      # Settings, including the backup path, live in this file (see start-dev.sh).
+      - CONFIG_FILE=/app/config.yml
+      # Used by main's server; the feature branch reads the path from config.yml.
       - BACKUP_DISK=/mnt/Backup
       - SCRIPTS_DIR=/scripts
     volumes:
       - ./backend/src:/app/src
+      - ./config.yml:/app/config.yml
       - /.snapshots:/.snapshots:ro
       - /home/.snapshots:/home/.snapshots:ro
       - /home/amitp/src/.snapshots:/home/amitp/src/.snapshots:ro
