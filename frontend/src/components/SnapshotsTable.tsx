@@ -29,6 +29,16 @@ interface SnapshotsTableProps {
   customColors?: ColorScheme;
 }
 
+/** The snapshot's type: the API's type field, else inferred from the ID suffix. */
+const getSnapshotType = (snapshot: Snapshot): string => {
+  if (snapshot.type) return snapshot.type;
+  const id = snapshot.id;
+  if (id.endsWith('-w')) return 'weekly';
+  if (id.endsWith('-m')) return 'monthly';
+  if (id.endsWith('-y')) return 'yearly';
+  return 'full';
+};
+
 export const SnapshotsTable: React.FC<SnapshotsTableProps> = ({
   snapshots,
   selectedIds,
@@ -44,8 +54,8 @@ export const SnapshotsTable: React.FC<SnapshotsTableProps> = ({
   const sorted = useMemo(() => {
     const copy = [...snapshots];
     copy.sort((a, b) => {
-      let aVal: any = a[sortColumn as keyof typeof a];
-      let bVal: any = b[sortColumn as keyof typeof b];
+      let aVal: any = sortColumn === 'type' ? getSnapshotType(a) : a[sortColumn as keyof typeof a];
+      let bVal: any = sortColumn === 'type' ? getSnapshotType(b) : b[sortColumn as keyof typeof b];
 
       // Handle nullish values
       if (aVal == null && bVal == null) return 0;
@@ -95,17 +105,6 @@ export const SnapshotsTable: React.FC<SnapshotsTableProps> = ({
     return <span className={styles.sortIcon}>{sortDirection === 'asc' ? ' ▲' : ' ▼'}</span>;
   };
 
-    const getSnapshotType = (snapshot: Snapshot): string => {
-    // If snapshot has a 'type' field, use it; otherwise infer from ID pattern
-    if ('type' in snapshot && snapshot.type) return snapshot.type;
-
-    // Common patterns: daily (no suffix), weekly (ends with -w), monthly (ends with -m)
-    const id = snapshot.id;
-    if (id.endsWith('-w')) return 'weekly';
-    if (id.endsWith('-m')) return 'monthly';
-    if (id.endsWith('-y')) return 'yearly';
-    return 'full';
-  };
 
   return (
     <div className={styles.tableContainer}>

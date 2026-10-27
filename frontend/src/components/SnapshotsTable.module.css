@@ -91,6 +91,7 @@
   padding: 10px 12px;
   vertical-align: middle;
   border-right: 1px solid #f0f0f0;
+  color: #222;
 }
 
 .row td:last-child {
