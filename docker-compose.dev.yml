@@ -28,9 +28,11 @@ services:
       - /.snapshots:/.snapshots:ro
       - /home/.snapshots:/home/.snapshots:ro
       - /home/amitp/src/.snapshots:/home/amitp/src/.snapshots:ro
-      - /mnt/Backup:/mnt/Backup:ro
+      - ${BACKUP_DISK:-/mnt/Backup}:/mnt/Backup:ro
       - ./scripts:/scripts:ro
     restart: "no"
+    # Dev only: label=disable stops SELinux from blocking the bind mounts above
+    # on SELinux hosts. Not for production.
     security_opt:
       - label=disable
 
@@ -50,5 +52,6 @@ services:
     depends_on:
       - api
     restart: "no"
+    # Dev only: see the note on the api service.
     security_opt:
       - label=disable
