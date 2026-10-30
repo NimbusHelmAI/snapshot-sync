@@ -5,7 +5,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # docker compose (v2) if present, otherwise the older docker-compose binary.
-if docker compose version >/dev/null 2>&1; then DC="docker compose"; else DC="docker-compose"; fi
+if docker compose version >/dev/null 2>&1; then
+  DC="docker compose"
+elif command -v docker-compose >/dev/null 2>&1; then
+  DC="docker-compose"
+else
+  echo "❌ Neither 'docker compose' (v2) nor 'docker-compose' is installed. Install Docker Compose v2 and try again." >&2
+  exit 1
+fi
 COMPOSE="$DC -f docker-compose.dev.yml"
 
 # Backup disk on the host. Overridable; the same path is mounted into the API container.
@@ -48,6 +55,13 @@ echo "API is up"
 
 echo "✅ Starting frontend in Docker..."
 $COMPOSE up -d --build web
+# The frontend is not checked by the API wait above. Wait a little, then warn
+# (do not stop) if it still does not answer.
+for i in $(seq 1 60); do
+  curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1 && break
+  sleep 1
+done
+curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1 || echo "⚠️  frontend is not answering on :3000 yet; check: $COMPOSE logs web"
 
 echo ""
 echo "🎉 Services ready:"
