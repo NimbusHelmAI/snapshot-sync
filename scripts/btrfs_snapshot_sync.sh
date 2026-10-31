@@ -25,7 +25,7 @@ DEST_ROOT="${1:?Usage: $0 <dest_root_on_external_btrfs>}"
 declare -A CONFIGS=(
   [root]="/.snapshots"
   [home]="/home/.snapshots"
-  [src]="/home/amitp/src/.snapshots"
+  [src]="${SRC_SNAPSHOT_DIR:-/home/amitp/src/.snapshots}"
 )
 
 N_OLDEST=5

@@ -22,12 +22,13 @@ services:
       # Used by main's server; the feature branch reads the path from config.yml.
       - BACKUP_DISK=/mnt/Backup
       - SCRIPTS_DIR=/scripts
+      - SRC_SNAPSHOT_DIR=${SRC_SNAPSHOT_DIR:-/home/amitp/src/.snapshots}
     volumes:
       - ./backend/src:/app/src
       - ./config.yml:/app/config.yml
       - /.snapshots:/.snapshots:ro
       - /home/.snapshots:/home/.snapshots:ro
-      - /home/amitp/src/.snapshots:/home/amitp/src/.snapshots:ro
+      - ${SRC_SNAPSHOT_DIR:-/home/amitp/src/.snapshots}:${SRC_SNAPSHOT_DIR:-/home/amitp/src/.snapshots}:ro
       - ${BACKUP_DISK:-/mnt/Backup}:/mnt/Backup:ro
       - ./scripts:/scripts:ro
     restart: "no"

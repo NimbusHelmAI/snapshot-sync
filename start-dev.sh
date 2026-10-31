@@ -17,6 +17,8 @@ COMPOSE="$DC -f docker-compose.dev.yml"
 
 # Backup disk on the host. Overridable; the same path is mounted into the API container.
 export BACKUP_DISK="${BACKUP_DISK:-/mnt/Backup}"
+# Snapshot directory for the src config. Overridable; the same path is mounted into the API container.
+export SRC_SNAPSHOT_DIR="${SRC_SNAPSHOT_DIR:-/home/amitp/src/.snapshots}"
 
 # Settings, including the backup path, live in config.yml. Create it on first run.
 [ -f config.yml ] || printf 'backupDisk: %s\n' "$BACKUP_DISK" > config.yml
@@ -40,7 +42,7 @@ sleep 1
 echo "✅ Starting API in Docker..."
 # The API reads these host paths, so refuse to start without them rather
 # than mount empty directories over them.
-for p in /.snapshots /home/.snapshots /home/amitp/src/.snapshots; do
+for p in /.snapshots /home/.snapshots "$SRC_SNAPSHOT_DIR"; do
   [ -d "$p" ] || { echo "❌ $p is missing"; exit 1; }
 done
 mountpoint -q "$BACKUP_DISK" || echo "⚠️  $BACKUP_DISK is not mounted; the backup side will show no configs"
