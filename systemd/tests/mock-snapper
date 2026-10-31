@@ -1,0 +1,27 @@
+#!/bin/bash
+# Mock of the snapper calls used by snapper-tag-links.sh.
+# FAIL_NUM=<n> makes modify on snapshot n fail.
+set -u
+[ "${1:-}" = "-c" ] || { echo "mock: expected -c" >&2; exit 2; }
+cfg=$2; cmd=$3; shift 3
+case "$cmd" in
+  get-config)
+    echo "SUBVOLUME │ $MOCK_ROOT/$cfg" ;;
+  modify)
+    desc=""; ud=""; num=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --description) desc=$2; shift 2 ;;
+        --userdata) ud=$2; shift 2 ;;
+        *) num=$1; shift ;;
+      esac
+    done
+    if [ -n "${FAIL_NUM:-}" ] && [ "$FAIL_NUM" = "$num" ]; then
+      echo "mock: forced failure on $num" >&2
+      exit 1
+    fi
+    f="$MOCK_ROOT/$cfg/.snapshots/$num/info.xml"
+    sed -i "s#<description>[^<]*</description>#<description>$desc</description>#" "$f"
+    echo "$cfg $num desc=$desc ud=$ud" >> "$MOCK_ROOT/modify.log" ;;
+  *) echo "mock: unknown command $cmd" >&2; exit 2 ;;
+esac
