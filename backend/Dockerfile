@@ -4,7 +4,7 @@ FROM node:18-alpine AS builder
 WORKDIR /app
 
 # Install btrfs-progs for the sync scripts
-RUN apk add --no-cache btrfs-progs sudo
+RUN apk add --no-cache btrfs-progs sudo coreutils
 
 # Install dependencies
 COPY package*.json ./
@@ -23,7 +23,7 @@ FROM node:18-alpine
 WORKDIR /app
 
 # Install btrfs-progs for the sync scripts
-RUN apk add --no-cache btrfs-progs sudo
+RUN apk add --no-cache btrfs-progs sudo coreutils
 
 # Copy built files
 COPY --from=builder /app/dist ./dist

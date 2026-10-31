@@ -86,7 +86,7 @@ DEST_ROOT="${1:?${USAGE}}"
 declare -A CONFIGS=(
   [root]="/.snapshots"
   [home]="/home/.snapshots"
-  [src]="/home/amitp/src/.snapshots"
+  [src]="${SRC_SNAPSHOT_DIR:-/home/amitp/src/.snapshots}"
 )
 
 for o in "${ONLY[@]+"${ONLY[@]}"}"; do

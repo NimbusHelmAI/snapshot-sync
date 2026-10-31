@@ -77,7 +77,7 @@ const CONFIG_NAMES = ['root', 'home', 'src'] as const;
 /** Where snapper keeps one config's snapshots on this machine. */
 function localConfigDir(config: string): string {
   if (config === 'root') return '/.snapshots';
-  if (config === 'src') return '/home/amitp/src/.snapshots';
+  if (config === 'src') return process.env.SRC_SNAPSHOT_DIR || '/home/amitp/src/.snapshots';
   return path.join('/', config, '.snapshots');
 }
 
