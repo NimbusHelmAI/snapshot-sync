@@ -22,14 +22,14 @@ services:
       # Used by main's server; the feature branch reads the path from config.yml.
       - BACKUP_DISK=/mnt/Backup
       - SCRIPTS_DIR=/scripts
-      - SRC_SNAPSHOT_DIR=${SRC_SNAPSHOT_DIR:-/home/amitp/src/.snapshots}
+      - SRC_SNAPSHOT_DIR=${SRC_SNAPSHOT_DIR:?set by start-dev.sh}
     volumes:
       - ./backend/src:/app/src
       - ./config.yml:/app/config.yml
       - /.snapshots:/.snapshots:ro
       - /home/.snapshots:/home/.snapshots:ro
-      - ${SRC_SNAPSHOT_DIR:-/home/amitp/src/.snapshots}:${SRC_SNAPSHOT_DIR:-/home/amitp/src/.snapshots}:ro
-      - ${BACKUP_DISK:-/mnt/Backup}:/mnt/Backup:ro
+      - ${SRC_SNAPSHOT_DIR:?set by start-dev.sh}:${SRC_SNAPSHOT_DIR:?set by start-dev.sh}:ro
+      - ${BACKUP_DISK:?set by start-dev.sh}:/mnt/Backup:ro
       - ./scripts:/scripts:ro
     restart: "no"
     # Dev only: label=disable stops SELinux from blocking the bind mounts above
