@@ -536,3 +536,32 @@
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
+
+/* Selection summary above a config's table: the count, Clear, and the disabled Delete. */
+.selectionBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  background: #f4f8fb;
+  border: 1px solid #d0e3f0;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #1f2328;
+}
+
+.selectionBar button {
+  padding: 3px 10px;
+  border: 1px solid #b6c7d6;
+  border-radius: 4px;
+  background: #fff;
+  color: #1f2328;
+  font: inherit;
+  cursor: pointer;
+}
+
+.selectionBar button:disabled {
+  color: #8c959f;
+  cursor: not-allowed;
+}

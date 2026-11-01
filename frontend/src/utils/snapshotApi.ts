@@ -8,6 +8,26 @@ import {
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || '';
 
+// The backup path is stored on the server (config.yml), so every browser sees the same value.
+export async function loadBackupPath(): Promise<string | null> {
+  const res = await fetch(`${apiBaseUrl}/api/settings`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return data.backupDisk || null;
+}
+
+export async function saveBackupPath(backupDisk: string): Promise<void> {
+  const res = await fetch(`${apiBaseUrl}/api/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ backupDisk }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+}
+
 /**
  * Throws when a response is not ok, preferring the API's own `{ error }`
  * message over the bare status text.
@@ -162,6 +182,28 @@ export async function loadSnapshots(
     return data.configs?.[configName] || [];
   } catch (error) {
     console.error('Error loading snapshots:', error);
+    throw error;
+  }
+}
+
+/**
+ * Parent links for one config's snapshots on the backup disk: { id: parentId | null }.
+ * Read on the server from btrfs metadata, so it is always the disk's current state.
+ */
+export async function loadBackupLinks(
+  configName: string,
+  path: string
+): Promise<Record<string, string | null>> {
+  try {
+    const query = `?${new URLSearchParams({ path })}`;
+    const response = await fetch(
+      `${apiBaseUrl}/api/backup-chains/${encodeURIComponent(configName)}${query}`
+    );
+    await throwIfNotOk(response, 'Failed to read backup links');
+    const data = await response.json();
+    return data.parentOf ?? {};
+  } catch (error) {
+    console.error('Error loading backup links:', error);
     throw error;
   }
 }

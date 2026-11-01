@@ -8,11 +8,14 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { loadConfigs, syncSnapshots, loadSnapshots } from '../utils/snapshotApi';
+import { loadConfigs, syncSnapshots, loadSnapshots, loadBackupPath, saveBackupPath, loadBackupLinks } from '../utils/snapshotApi';
 import { browseSnapshot, previewFile, formatSize, formatModified } from '../utils/snapshotApi';
 import type { BrowseItem, BrowseTarget, FilePreview } from '../types';
 import styles from './SnapshotComparison.module.css';
 import { SnapshotsTable } from './SnapshotsTable';
+import { SnapshotActionMenu } from './SnapshotActionMenu';
+import type { MenuItem } from './SnapshotActionMenu';
+import { chainOf } from '../utils/snapshotChains';
 
 /** Shown on the controls that are deliberately inert until NHA-93 lands. */
 const SYNC_DISABLED_HINT =
@@ -67,6 +70,16 @@ interface DiskSide {
   type: 'local' | 'external';
 }
 
+/** The open row menu: which snapshot it is for, and where to draw it. */
+interface SnapshotMenu {
+  diskPath: string;
+  diskType: DiskSide['type'];
+  config: string;
+  snapshotId: string;
+  x: number;
+  y: number;
+}
+
 interface AppSettings {
   localPath: string;
   externalPath: string;
@@ -75,7 +88,7 @@ const settingsKey = 'snapshot-comparison-settings';
 
 const defaultSettings: AppSettings = {
   localPath: '/',
-  externalPath: '/run/media/amitp/Backup',
+  externalPath: '',
 };
 
 export const SnapshotComparison: React.FC = () => {
@@ -113,6 +126,11 @@ export const SnapshotComparison: React.FC = () => {
   const [browsePath, setBrowsePath] = useState('');
   const [browseLoading, setBrowseLoading] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
+
+  // Parent links per backup config, keyed by configKey: { snapshotId: parentId | null }.
+  const [parentLinks, setParentLinks] = useState<Record<string, Record<string, string | null>>>({});
+  // The open row menu (⋯ or right-click). Null means closed.
+  const [menu, setMenu] = useState<SnapshotMenu | null>(null);
 
   // File preview, layered over the browse list. Null means nothing is open.
   const [preview, setPreview] = useState<FilePreview | null>(null);
@@ -156,8 +174,15 @@ export const SnapshotComparison: React.FC = () => {
     }
   };
 
+  // The backup path comes from the server. The effect below refreshes the configs.
   useEffect(() => {
-    refreshConfigs();
+    loadBackupPath()
+      .then((backupDisk) => {
+        if (!backupDisk) return;
+        setRight((prev) => ({ ...prev, path: backupDisk }));
+        setSettings((prev) => ({ ...prev, externalPath: backupDisk }));
+      })
+      .catch((err) => console.error('Could not load backup path:', err));
   }, []);
 
   useEffect(() => {
@@ -170,7 +195,13 @@ export const SnapshotComparison: React.FC = () => {
     setRight(temp);
   };
 
-  const handleSettingsSave = (newSettings: AppSettings) => {
+  const handleSettingsSave = async (newSettings: AppSettings) => {
+    try {
+      await saveBackupPath(newSettings.externalPath);
+    } catch (err) {
+      setError(`Could not save backup path: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     saveSettings(newSettings);
     setLeft((prev) => ({ ...prev, path: newSettings.localPath }));
     setRight((prev) => ({ ...prev, path: newSettings.externalPath }));
@@ -233,12 +264,54 @@ export const SnapshotComparison: React.FC = () => {
       setLoading(true);
       const snapshots = await loadSnapshots(configName, diskPath);
       setLoadedSnapshots((prev) => ({ ...prev, [key]: snapshots }));
+      // The list changed, so the links read for it may be stale too.
+      setParentLinks((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
     } catch (err) {
       console.error(`Failed to load snapshots for ${configName} on ${diskPath}:`, err);
       setError(`Failed to load snapshots for ${configName} on ${diskPath}`);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Parent links are read from the backup disk, once per expanded config. The
+  // reload in toggleExpanded drops them, so they are read again after a change.
+  useEffect(() => {
+    for (const disk of [left, right]) {
+      if (disk.type !== 'external') continue;
+      for (const cfg of disk.configs) {
+        const key = configKey(disk.path, cfg.name);
+        if (!expandedConfigs.has(key) || parentLinks[key]) continue;
+        loadBackupLinks(cfg.name, disk.path)
+          .then((parentOf) => setParentLinks((prev) => ({ ...prev, [key]: parentOf })))
+          .catch((err) => console.error(`Could not read links for ${cfg.name} on ${disk.path}:`, err));
+      }
+    }
+  }, [expandedConfigs, parentLinks, left, right]);
+
+  /** Adds snapshots to the selection of one config on one disk. Never removes any. */
+  const selectSnapshots = (diskPath: string, configName: string, ids: string[]) => {
+    setSelectedSnapshots((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(snapshotKey(diskPath, configName, id)));
+      return next;
+    });
+  };
+
+  /** Clears the selection of one config on one disk. */
+  const clearSelection = (diskPath: string, configName: string) => {
+    const prefix = configKey(diskPath, configName) + KEY_SEP;
+    setSelectedSnapshots((prev) => {
+      const next = new Set(prev);
+      Array.from(prev).forEach((k) => {
+        if (k.startsWith(prefix)) next.delete(k);
+      });
+      return next;
+    });
   };
 
   const toggleSnapshot = (diskPath: string, configName: string, snapshotId: string) => {
@@ -250,6 +323,16 @@ export const SnapshotComparison: React.FC = () => {
       return next;
     });
   };
+
+  /** Opens the row menu for one snapshot, at the ⋯ button or right-click position. */
+  const openMenu = (
+    diskPath: string,
+    diskType: DiskSide['type'],
+    config: string,
+    snapshotId: string,
+    x: number,
+    y: number
+  ) => setMenu({ diskPath, diskType, config, snapshotId, x, y });
 
   const handleSync = async (direction: 'leftToRight' | 'rightToLeft') => {
     if (selectedConfigs.size === 0) {
@@ -538,6 +621,8 @@ export const SnapshotComparison: React.FC = () => {
           onConfigSelect={setSelectedConfigLeft}
           onBrowse={handleBrowse}
           onRestore={handleRestore}
+          onOpenMenu={openMenu}
+          onClearSelection={clearSelection}
         />
 
         {/*
@@ -580,8 +665,38 @@ export const SnapshotComparison: React.FC = () => {
           onConfigSelect={setSelectedConfigRight}
           onBrowse={handleBrowse}
           onRestore={handleRestore}
+          onOpenMenu={openMenu}
+          onClearSelection={clearSelection}
         />
       </div>
+
+      {menu && (() => {
+        const links = parentLinks[configKey(menu.diskPath, menu.config)];
+        const items: MenuItem[] = [
+          {
+            label: 'Browse',
+            onSelect: () => handleBrowse(menu.config, menu.snapshotId, menu.diskPath),
+          },
+        ];
+        if (menu.diskType === 'external') {
+          const chain = links ? chainOf(menu.snapshotId, links) : [];
+          items.push({
+            label: links ? `Select chain (${chain.length})` : 'Select chain',
+            disabled: !links,
+            title: links ? undefined : 'Links from the backup disk are still loading or unavailable',
+            onSelect: () => selectSnapshots(menu.diskPath, menu.config, chain),
+          });
+        }
+        return (
+          <SnapshotActionMenu
+            x={menu.x}
+            y={menu.y}
+            heading={`📸 ${menu.snapshotId}`}
+            items={items}
+            onClose={() => setMenu(null)}
+          />
+        );
+      })()}
 
       <div className={styles.status}>
         <span>{selectedConfigs.size} config(s) selected</span>
@@ -611,6 +726,15 @@ interface DiskPanelProps {
   onConfigSelect: (configName: string) => void;
   onBrowse: (config: string, snapshotId: string, diskPath: string) => Promise<void>;
   onRestore: (config: string, snapshotId: string) => void;
+  onOpenMenu: (
+    diskPath: string,
+    diskType: DiskSide['type'],
+    config: string,
+    snapshotId: string,
+    x: number,
+    y: number
+  ) => void;
+  onClearSelection: (diskPath: string, configName: string) => void;
 }
 
 const DiskPanel: React.FC<DiskPanelProps> = ({
@@ -625,6 +749,8 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
   onToggleSnapshot,
   onBrowse,
   onRestore,
+  onOpenMenu,
+  onClearSelection,
   // selectedConfig and onConfigSelect - TODO: implement config override UI
 }) => {
   const icon = disk.type === 'local' ? '💾' : '💿';
@@ -675,23 +801,36 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
             </div>
             {isExpanded && (
               <div className={styles.snapshotList}>
+                {selectedIds.length > 0 && (
+                  <div className={styles.selectionBar}>
+                    <span>{selectedIds.length} selected</span>
+                    <button className={styles.actionBtn} onClick={() => onClearSelection(disk.path, cfg.name)}>
+                      Clear
+                    </button>
+                    <button
+                      className={styles.actionBtn}
+                      disabled
+                      title="Deleting is not built yet (Phase 2)"
+                    >
+                      Delete…
+                    </button>
+                  </div>
+                )}
                 {snapshots ? (
                   snapshots.length > 0 ? (
                     <SnapshotsTable
                       snapshots={snapshots}
                       selectedIds={new Set(selectedIds)}
                       onSelectChange={(snapId, selected) => {
+                        const key = snapshotKey(disk.path, cfg.name, snapId);
                         // Toggle only when the row's state actually changes.
-                        const isSelected = selectedSnapshots.has(
-                          snapshotKey(disk.path, cfg.name, snapId)
-                        );
-                        if (selected !== isSelected) {
+                        if (selected !== selectedSnapshots.has(key)) {
                           onToggleSnapshot(disk.path, cfg.name, snapId);
                         }
                       }}
-                      onContextMenu={(snapId) => {
-                        void onBrowse(cfg.name, snapId, disk.path);
-                      }}
+                      onContextMenu={(snapId, x, y) =>
+                        onOpenMenu(disk.path, disk.type, cfg.name, snapId, x, y)
+                      }
                     />
                   ) : (
                     <p className={styles.snapshotPlaceholder}>No snapshots found</p>
@@ -772,7 +911,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({
             type="text"
             value={externalPath}
             onChange={(e) => setExternalPath(e.target.value)}
-            placeholder="/run/media/amitp/Backup"
+            placeholder="/mnt/Backup"
           />
         </div>
         <div className={styles.settingsActions}>
