@@ -12,6 +12,7 @@ import { loadConfigs, syncSnapshots, loadSnapshots } from '../utils/snapshotApi'
 import { browseSnapshot, previewFile, formatSize, formatModified } from '../utils/snapshotApi';
 import type { BrowseItem, BrowseTarget, FilePreview } from '../types';
 import styles from './SnapshotComparison.module.css';
+import { SnapshotsTable } from './SnapshotsTable';
 
 /** Shown on the controls that are deliberately inert until NHA-93 lands. */
 const SYNC_DISABLED_HINT =
@@ -676,25 +677,22 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
               <div className={styles.snapshotList}>
                 {snapshots ? (
                   snapshots.length > 0 ? (
-                    <ul className={styles.snapshotItems}>
-                      {snapshots.map((snap: any) => {
+                    <SnapshotsTable
+                      snapshots={snapshots}
+                      selectedIds={new Set(selectedIds)}
+                      onSelectChange={(snapId, selected) => {
+                        // Toggle only when the row's state actually changes.
                         const isSelected = selectedSnapshots.has(
-                          snapshotKey(disk.path, cfg.name, snap.id)
+                          snapshotKey(disk.path, cfg.name, snapId)
                         );
-                        return (
-                          <li
-                            key={snap.id}
-                            className={`${styles.snapshotItem} ${isSelected ? styles.snapshotItemSelected : ''}`}
-                            onClick={() => onToggleSnapshot(disk.path, cfg.name, snap.id)}
-                          >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                              <span>📸 {snap.id}</span>
-                              <small style={{ fontSize: '0.75em', opacity: 1, color: '#666' }}>{snap.date || 'unknown'}</small>
-                            </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
+                        if (selected !== isSelected) {
+                          onToggleSnapshot(disk.path, cfg.name, snapId);
+                        }
+                      }}
+                      onContextMenu={(snapId) => {
+                        void onBrowse(cfg.name, snapId, disk.path);
+                      }}
+                    />
                   ) : (
                     <p className={styles.snapshotPlaceholder}>No snapshots found</p>
                   )
