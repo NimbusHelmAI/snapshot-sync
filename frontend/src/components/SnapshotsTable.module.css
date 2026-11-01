@@ -1,6 +1,25 @@
+.wrapper {
+  width: 100%;
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 2px 8px;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.summaryNote {
+  color: #999;
+}
+
+/* Scrolls vertically past 60% of the viewport, and horizontally on narrow screens. */
 .tableContainer {
   width: 100%;
-  overflow-x: auto;
+  max-height: 60vh;
+  overflow: auto;
   border: 1px solid #ddd;
   border-radius: 4px;
   background: #fff;
@@ -15,10 +34,9 @@
 .headerRow {
   background-color: #f5f5f5;
   border-bottom: 2px solid #ddd;
-  position: sticky;
-  top: 0;
 }
 
+/* Sticky on the cells, not the row: a sticky row does not stay put in every browser. */
 .headerRow th {
   padding: 12px;
   text-align: left;
@@ -27,6 +45,10 @@
   user-select: none;
   cursor: pointer;
   border-right: 1px solid #e0e0e0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: #f5f5f5;
 }
 
 .headerRow th:hover {
@@ -63,6 +85,15 @@
 
 .typeCol {
   width: 100px;
+}
+
+.sizeCol {
+  width: 110px;
+  white-space: nowrap;
+}
+
+.configCol {
+  width: 90px;
 }
 
 .statusCol {

@@ -17,8 +17,11 @@ export interface Panel {
 
 export interface Snapshot {
   id: string;
+  /** Which snapper config the snapshot belongs to: root, home or src. */
+  config?: string;
   date: string;
   type?: 'full' | 'daily' | 'weekly' | 'monthly' | 'yearly';
+  /** Exclusive size in bytes; absent when it could not be measured. */
   size?: number;
   parentId?: string;
   childIds?: string[];

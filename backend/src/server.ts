@@ -282,10 +282,18 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
           if (isBackupPath(queryPath)) {
             const stat = fs.statSync(snapshotPath);
             if (stat.isDirectory()) {
-              snapshots.push({ id: entry, date });
+              snapshots.push({
+                id: entry,
+                config,
+                date,
+              });
             }
           } else {
-            snapshots.push({ id: entry, date });
+            snapshots.push({
+              id: entry,
+              config,
+              date,
+            });
           }
         } catch (e) {}
       });

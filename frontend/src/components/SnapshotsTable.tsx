@@ -1,21 +1,24 @@
 /**
  * SnapshotsTable Component
  *
- * Sortable, filterable table of snapshots with details like:
+ * Sortable table of snapshots with:
  * - Snapshot ID
  * - Type (full, daily, weekly, monthly, etc.)
  * - Date created
- * - Size
- * - Incremental chain depth
+ * - Size (exclusive, from the server; "—" when it could not be measured)
+ * - Config (root, home or src)
  * - Backup status (synced to external, or not)
+ *
+ * Shows a summary above the table with the snapshot count and the total size.
  */
 
 import React, { useState, useMemo } from 'react';
 import type { Snapshot } from '../types';
 import type { ColorScheme } from './ColorCustomizer';
+import { formatSize } from '../utils/snapshotApi';
 import styles from './SnapshotsTable.module.css';
 
-type SortColumn = 'id' | 'date' | 'type' | 'size' | 'chain';
+type SortColumn = 'id' | 'date' | 'type' | 'size' | 'config';
 type SortDirection = 'asc' | 'desc';
 
 interface SnapshotsTableProps {
@@ -39,6 +42,23 @@ const getSnapshotType = (snapshot: Snapshot): string => {
   return 'full';
 };
 
+/** The value a column sorts by. undefined sorts last in either direction. */
+const sortValue = (snapshot: Snapshot, column: SortColumn): string | number | undefined => {
+  switch (column) {
+    case 'id':
+      // Snapper numbers are numeric: sort 999 before 1000, not after "1000".
+      return Number(snapshot.id);
+    case 'date':
+      return snapshot.date;
+    case 'type':
+      return getSnapshotType(snapshot);
+    case 'size':
+      return snapshot.size;
+    case 'config':
+      return snapshot.config;
+  }
+};
+
 export const SnapshotsTable: React.FC<SnapshotsTableProps> = ({
   snapshots,
   selectedIds,
@@ -54,32 +74,36 @@ export const SnapshotsTable: React.FC<SnapshotsTableProps> = ({
   const sorted = useMemo(() => {
     const copy = [...snapshots];
     copy.sort((a, b) => {
-      let aVal: any = sortColumn === 'type' ? getSnapshotType(a) : a[sortColumn as keyof typeof a];
-      let bVal: any = sortColumn === 'type' ? getSnapshotType(b) : b[sortColumn as keyof typeof b];
+      const aVal = sortValue(a, sortColumn);
+      const bVal = sortValue(b, sortColumn);
 
-      // Handle nullish values
       if (aVal == null && bVal == null) return 0;
-      if (aVal == null) return sortDirection === 'asc' ? 1 : -1;
-      if (bVal == null) return sortDirection === 'asc' ? -1 : 1;
+      if (aVal == null) return 1;
+      if (bVal == null) return -1;
 
-      // For date strings in YYYY-MM-DD format, compare as strings (lexicographic works)
-      if (sortColumn === 'date' && typeof aVal === 'string' && typeof bVal === 'string') {
-        const cmp = aVal.localeCompare(bVal);
-        return sortDirection === 'asc' ? cmp : -cmp;
-      }
+      let cmp =
+        typeof aVal === 'number' && typeof bVal === 'number'
+          ? aVal - bVal
+          : String(aVal).localeCompare(String(bVal));
+      // Ties keep a stable order by ID.
+      if (cmp === 0) cmp = Number(a.id) - Number(b.id);
 
-      // Numeric comparison
-      if (typeof aVal === 'number' && typeof bVal === 'number') {
-        const cmp = aVal - bVal;
-        return sortDirection === 'asc' ? cmp : -cmp;
-      }
-
-      // String comparison
-      const cmp = String(aVal).localeCompare(String(bVal));
       return sortDirection === 'asc' ? cmp : -cmp;
     });
     return copy;
   }, [snapshots, sortColumn, sortDirection]);
+
+  const totals = useMemo(() => {
+    let bytes = 0;
+    let known = 0;
+    for (const s of snapshots) {
+      if (s.size != null) {
+        bytes += s.size;
+        known += 1;
+      }
+    }
+    return { bytes, known, count: snapshots.length };
+  }, [snapshots]);
 
   const handleHeaderClick = (column: SortColumn) => {
     if (sortColumn === column) {
@@ -100,135 +124,168 @@ export const SnapshotsTable: React.FC<SnapshotsTableProps> = ({
     }
   };
 
-  const SortIcon: React.FC<{ column: SortColumn }> = ({ column }) => {
+  const sortIcon = (column: SortColumn) => {
     if (sortColumn !== column) return <span className={styles.sortIcon} />;
     return <span className={styles.sortIcon}>{sortDirection === 'asc' ? ' ▲' : ' ▼'}</span>;
   };
 
+  const sortableHeader = (column: SortColumn, label: string, className: string) => (
+    <th
+      className={className}
+      onClick={() => handleHeaderClick(column)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          handleHeaderClick(column);
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-sort={
+        sortColumn === column ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'
+      }
+    >
+      {label} {sortIcon(column)}
+    </th>
+  );
+
+  // checkbox, ID, date, type, size, config, actions; plus backup status when shown.
+  const columnCount = 7 + (showBackupStatus ? 1 : 0);
 
   return (
-    <div className={styles.tableContainer}>
-      <table className={styles.table}>
-        <thead>
-          <tr className={styles.headerRow}>
-            <th className={styles.checkboxCol}>
-              <input
-                type="checkbox"
-                checked={allSelected}
-                
-                onChange={handleSelectAll}
-                title="Select all snapshots"
-              />
-            </th>
-            <th
-              className={styles.idCol}
-              onClick={() => handleHeaderClick('id')}
-              role="button"
-              tabIndex={0}
-            >
-              ID <SortIcon column="id" />
-            </th>
-            <th
-              className={styles.dateCol}
-              onClick={() => handleHeaderClick('date')}
-              role="button"
-              tabIndex={0}
-            >
-              Date <SortIcon column="date" />
-            </th>
-            <th
-              className={styles.typeCol}
-              onClick={() => handleHeaderClick('type')}
-              role="button"
-              tabIndex={0}
-            >
-              Type <SortIcon column="type" />
-            </th>
-            {showBackupStatus && (
-              <th className={styles.statusCol}>Backup Status</th>
-            )}
-            <th className={styles.actionsCol}>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.length === 0 ? (
-            <tr className={styles.emptyRow}>
-              <td colSpan={showBackupStatus ? 6 : 5} className={styles.emptyCell}>
-                No snapshots
-              </td>
-            </tr>
-          ) : (
-            sorted.map((snapshot) => {
-              const isSelected = selectedIds.has(snapshot.id);
-              const type = getSnapshotType(snapshot);
-              const isSynced = backupSyncedIds.has(snapshot.id);
+    <div className={styles.wrapper}>
+      <div className={styles.summary} aria-live="polite">
+        <span>
+          {totals.count} {totals.count === 1 ? 'snapshot' : 'snapshots'}
+        </span>
+        {totals.known > 0 && (
+          <span
+            title="Space that only these snapshots hold: what deleting them would free. Snapshots that share data are counted once, in the snapshots that do not share it."
+          >
+            · {formatSize(totals.bytes)} exclusive
+          </span>
+        )}
+        {totals.known > 0 && totals.known < totals.count && (
+          <span className={styles.summaryNote}>
+            · size known for {totals.known} of {totals.count}
+          </span>
+        )}
+      </div>
 
-              return (
-                <tr
-                  key={snapshot.id}
-                  className={`${styles.row} ${isSelected ? styles.rowSelected : ''}`}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    onContextMenu?.(snapshot.id, e.clientX, e.clientY);
-                  }}
-                >
-                  <td className={styles.checkboxCol}>
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={(e) => onSelectChange(snapshot.id, e.target.checked)}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  </td>
-                  <td className={styles.idCol}>
-                    <code className={styles.snapshotId}>{snapshot.id}</code>
-                  </td>
-                  <td className={styles.dateCol}>
-                    {snapshot.date || '—'}
-                  </td>
-                  <td className={styles.typeCol}>
-                    <span
-                      className={styles.typeTag}
-                      style={
-                        customColors && customColors[type as keyof typeof customColors]
-                          ? {
-                              backgroundColor: customColors[type as keyof typeof customColors].bg,
-                              color: customColors[type as keyof typeof customColors].text,
-                              borderColor: customColors[type as keyof typeof customColors].border,
-                            }
-                          : {}
-                      }
-                    >
-                      {type}
-                    </span>
-                  </td>
-                  {showBackupStatus && (
-                    <td className={styles.statusCol}>
-                      {isSynced ? (
-                        <span className={styles.synced} title="Synced to backup">✓ Synced</span>
-                      ) : (
-                        <span className={styles.notSynced} title="Not synced to backup">✗ Not synced</span>
-                      )}
+      <div className={styles.tableContainer}>
+        <table className={styles.table}>
+          <thead>
+            <tr className={styles.headerRow}>
+              <th className={styles.checkboxCol}>
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={handleSelectAll}
+                  title="Select all snapshots"
+                />
+              </th>
+              {sortableHeader('id', 'ID', styles.idCol)}
+              {sortableHeader('date', 'Date', styles.dateCol)}
+              {sortableHeader('type', 'Type', styles.typeCol)}
+              {sortableHeader('size', 'Size', styles.sizeCol)}
+              {sortableHeader('config', 'Config', styles.configCol)}
+              {showBackupStatus && (
+                <th className={styles.statusCol}>Backup Status</th>
+              )}
+              <th className={styles.actionsCol}>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.length === 0 ? (
+              <tr className={styles.emptyRow}>
+                <td colSpan={columnCount} className={styles.emptyCell}>
+                  No snapshots
+                </td>
+              </tr>
+            ) : (
+              sorted.map((snapshot) => {
+                const isSelected = selectedIds.has(snapshot.id);
+                const type = getSnapshotType(snapshot);
+                const isSynced = backupSyncedIds.has(snapshot.id);
+
+                return (
+                  <tr
+                    key={snapshot.id}
+                    className={`${styles.row} ${isSelected ? styles.rowSelected : ''}`}
+                    onClick={(e) => {
+                      // Buttons and the checkbox handle their own clicks.
+                      if ((e.target as HTMLElement).closest('button, input')) return;
+                      onSelectChange(snapshot.id, !isSelected);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      onContextMenu?.(snapshot.id, e.clientX, e.clientY);
+                    }}
+                  >
+                    <td className={styles.checkboxCol}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={(e) => onSelectChange(snapshot.id, e.target.checked)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
                     </td>
-                  )}
-                  <td className={styles.actionsCol}>
-                    <button
-                      className={styles.actionBtn}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onContextMenu?.(snapshot.id, e.clientX, e.clientY);
-                      }}
-                      title="Right-click for more options"
-                    >
-                      ⋯
-                    </button>
-                  </td>
-                </tr>
-              );
-            })
-          )}
-        </tbody>
-      </table>
+                    <td className={styles.idCol}>
+                      <code className={styles.snapshotId}>{snapshot.id}</code>
+                    </td>
+                    <td className={styles.dateCol}>
+                      {snapshot.date || '—'}
+                    </td>
+                    <td className={styles.typeCol}>
+                      <span
+                        className={styles.typeTag}
+                        style={
+                          customColors && customColors[type as keyof typeof customColors]
+                            ? {
+                                backgroundColor: customColors[type as keyof typeof customColors].bg,
+                                color: customColors[type as keyof typeof customColors].text,
+                                borderColor: customColors[type as keyof typeof customColors].border,
+                              }
+                            : {}
+                        }
+                      >
+                        {type}
+                      </span>
+                    </td>
+                    <td className={styles.sizeCol}>
+                      {snapshot.size != null ? formatSize(snapshot.size) : '—'}
+                    </td>
+                    <td className={styles.configCol}>
+                      {snapshot.config ?? '—'}
+                    </td>
+                    {showBackupStatus && (
+                      <td className={styles.statusCol}>
+                        {isSynced ? (
+                          <span className={styles.synced} title="Synced to backup">✓ Synced</span>
+                        ) : (
+                          <span className={styles.notSynced} title="Not synced to backup">✗ Not synced</span>
+                        )}
+                      </td>
+                    )}
+                    <td className={styles.actionsCol}>
+                      <button
+                        className={styles.actionBtn}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onContextMenu?.(snapshot.id, e.clientX, e.clientY);
+                        }}
+                        title="Right-click for more options"
+                      >
+                        ⋯
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 };
