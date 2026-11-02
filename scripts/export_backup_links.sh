@@ -6,20 +6,28 @@
 # Run from root's crontab, for example every 5 minutes:
 #   */5 * * * * /path/to/scripts/export_backup_links.sh /mnt/Backup /var/lib/snapshot-sync/links
 #
-# Usage: sudo ./scripts/export_backup_links.sh <backup-disk> <output-folder>
+# Usage: sudo ./scripts/export_backup_links.sh [--test] <backup-disk> <output-folder>
+#
+# --test exists for the tests only: it skips the root and mount checks so the tests
+# can run with a fake btrfs. Cron must never pass it: without the mount check, an
+# unmounted disk would be exported as "no snapshots".
 set -euo pipefail
 
-DISK="${1:?usage: $0 <backup-disk> <output-folder>}"
-OUT="${2:?usage: $0 <backup-disk> <output-folder>}"
+TEST_MODE=0
+if [ "${1:-}" = "--test" ]; then
+  TEST_MODE=1
+  shift
+fi
+DISK="${1:?usage: $0 [--test] <backup-disk> <output-folder>}"
+OUT="${2:?usage: $0 [--test] <backup-disk> <output-folder>}"
 BTRFS="${BTRFS_BIN:-btrfs}"
 CONFIGS=(root home src)
 
-if [ "$(id -u)" -ne 0 ]; then
+if [ "$TEST_MODE" -eq 0 ] && [ "$(id -u)" -ne 0 ]; then
   echo "run as root, for example with sudo" >&2
   exit 1
 fi
-# EXPORT_SKIP_MOUNT_CHECK is for tests only; cron must not set it.
-if [ -z "${EXPORT_SKIP_MOUNT_CHECK:-}" ] && ! mountpoint -q "$DISK"; then
+if [ "$TEST_MODE" -eq 0 ] && ! mountpoint -q "$DISK"; then
   echo "$DISK is not mounted; keeping the previous links" >&2
   exit 1
 fi
@@ -41,21 +49,25 @@ with open(listing, encoding="utf-8") as f:
     for line in f:
         m = row.match(line.rstrip("\n"))
         if m:
-            parent, _, uuid, subvol = m.groups()
-            rows.append((uuid, None if parent == "-" else parent, subvol))
+            parent, received, uuid, subvol = m.groups()
+            rows.append((uuid, None if parent == "-" else parent,
+                         None if received == "-" else received, subvol))
 
 stamp = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 for config in configs:
     member = re.compile(rf"(?:^|/){re.escape(config)}/(\d+)$")
     ids = {}      # uuid -> snapshot id, for this config only
     parents = {}  # snapshot id -> parent uuid
-    for uuid, parent_uuid, subvol in rows:
+    snapshots = {}  # snapshot id -> {uuid, receivedUuid}; receivedUuid names the source copy
+    for uuid, parent_uuid, received_uuid, subvol in rows:
         m = member.search(subvol)
         if m:
             ids[uuid] = m.group(1)
             parents[m.group(1)] = parent_uuid
+            snapshots[m.group(1)] = {"uuid": uuid, "receivedUuid": received_uuid}
     parent_of = {sid: (ids.get(pu) if pu else None) for sid, pu in parents.items()}
-    doc = {"path": disk, "config": config, "exportedAt": stamp, "parentOf": parent_of}
+    doc = {"path": disk, "config": config, "exportedAt": stamp,
+           "parentOf": parent_of, "snapshots": snapshots}
     target = os.path.join(out, f"{config}.json")
     tmp = target + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

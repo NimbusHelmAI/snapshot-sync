@@ -3,6 +3,7 @@ import fs, { existsSync, readdirSync } from 'fs';
 import { execFileSync } from 'child_process';
 import path, { join } from 'path';
 import cors from 'cors';
+import { checkDelete, localParentOf, BackupExport, LocalExport } from './deleteCheck';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3001);
@@ -328,6 +329,9 @@ app.get('/api/backup-chains/:config', (req: Request, res: Response) => {
   if (!LINKS_DIR) {
     return res.status(503).json({ error: 'LINKS_DIR is not set; links are not exported' });
   }
+  if (!isMountPoint(queryPath)) {
+    return res.status(503).json({ error: 'Backup disk is not mounted' });
+  }
   const file = path.join(LINKS_DIR, `${config}.json`);
   try {
     const data = JSON.parse(readTextFile(file));
@@ -341,6 +345,79 @@ app.get('/api/backup-chains/:config', (req: Request, res: Response) => {
     }
     const message = describeError(error);
     console.error(`Could not read exported links ${file}: ${message}`);
+    res.status(500).json({ error: message });
+  }
+});
+
+// Read-only delete check. It reads the two exports and never touches a snapshot.
+// Refuses when either export is missing, so an absent file never looks like
+// "not on source" or "no backup copy".
+const DELETE_CHECK_MAX_AGE_MS = 15 * 60 * 1000; // exports run every 5 minutes
+
+// Parent links of the local disk, from the local export (scripts/export_local_links.sh).
+app.get('/api/local-chains/:config', (req: Request, res: Response) => {
+  const config = req.params.config;
+  if (!(CONFIG_NAMES as readonly string[]).includes(config)) {
+    return res.status(400).json({ error: `Unknown config: ${config}` });
+  }
+  if (!LINKS_DIR) {
+    return res.status(503).json({ error: 'LINKS_DIR is not set; links are not exported' });
+  }
+  const file = path.join(LINKS_DIR, `local-${config}.json`);
+  try {
+    const data: LocalExport = JSON.parse(readTextFile(file));
+    res.json({ config, exportedAt: data.exportedAt, parentOf: localParentOf(data) });
+  } catch (error) {
+    if (isMissingError(error)) {
+      return res.status(404).json({ error: `No exported local links for ${config}` });
+    }
+    const message = describeError(error);
+    console.error(`Could not read exported local links ${file}: ${message}`);
+    res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/delete-check/:config/:id', (req: Request, res: Response) => {
+  const config = req.params.config;
+  const id = req.params.id;
+  if (!(CONFIG_NAMES as readonly string[]).includes(config)) {
+    return res.status(400).json({ error: `Unknown config: ${config}` });
+  }
+  if (!SAFE_SEGMENT.test(id)) {
+    return res.status(400).json({ error: 'invalid snapshot id' });
+  }
+  const queryPath = typeof req.query.path === 'string' ? req.query.path : '';
+  if (!queryPath || !isBackupPath(queryPath)) {
+    return res.status(400).json({ error: 'path must be the backup disk' });
+  }
+  if (!LINKS_DIR) {
+    return res.status(503).json({ error: 'LINKS_DIR is not set; links are not exported' });
+  }
+  if (!isMountPoint(queryPath)) {
+    return res.status(503).json({ error: 'Backup disk is not mounted; deletion is blocked until it is' });
+  }
+  try {
+    const local: LocalExport = JSON.parse(readTextFile(path.join(LINKS_DIR, `local-${config}.json`)));
+    const backup: BackupExport = JSON.parse(readTextFile(path.join(LINKS_DIR, `${config}.json`)));
+    if (backup.path !== queryPath) {
+      return res.status(409).json({ error: `Links were exported for ${backup.path}, not ${queryPath}` });
+    }
+    const now = Date.now();
+    const stale =
+      now - Date.parse(local.exportedAt) > DELETE_CHECK_MAX_AGE_MS ||
+      now - Date.parse(backup.exportedAt) > DELETE_CHECK_MAX_AGE_MS;
+    res.json({
+      ...checkDelete(config, id, local, backup),
+      localExportedAt: local.exportedAt,
+      backupExportedAt: backup.exportedAt,
+      stale,
+    });
+  } catch (error) {
+    if (isMissingError(error)) {
+      return res.status(404).json({ error: `No exported links for ${config}; run the links export first` });
+    }
+    const message = describeError(error);
+    console.error(`Delete check failed for ${config}/${id}: ${message}`);
     res.status(500).json({ error: message });
   }
 });
@@ -881,7 +958,8 @@ app.get('/api/configs', (req: Request, res: Response) => {
     }
   }
 
-  res.json({ configs });
+  // mounted is false when nothing is mounted at the backup path: the folder is then empty.
+  res.json({ configs, mounted: local || isMountPoint(queryPath) });
 });
 
 app.listen(PORT, HOST, () => {

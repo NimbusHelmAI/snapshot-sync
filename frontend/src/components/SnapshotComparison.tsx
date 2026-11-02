@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { loadConfigs, syncSnapshots, loadSnapshots, loadBackupPath, saveBackupPath, loadBackupLinks } from '../utils/snapshotApi';
+import { loadConfigStatus, syncSnapshots, loadSnapshots, loadBackupPath, saveBackupPath, loadBackupLinks, loadLocalLinks } from '../utils/snapshotApi';
 import { browseSnapshot, previewFile, formatSize, formatModified } from '../utils/snapshotApi';
 import type { BrowseItem, BrowseTarget, FilePreview } from '../types';
 import styles from './SnapshotComparison.module.css';
@@ -68,6 +68,8 @@ interface DiskSide {
   path: string;
   configs: SnapperConfig[];
   type: 'local' | 'external';
+  /** False when the backup disk is not mounted. Always true for the local disk. */
+  mounted: boolean;
 }
 
 /** The open row menu: which snapshot it is for, and where to draw it. */
@@ -102,6 +104,7 @@ export const SnapshotComparison: React.FC = () => {
     path: settings.localPath,
     configs: [],
     type: 'local',
+    mounted: true,
   });
 
   const [right, setRight] = useState<DiskSide>({
@@ -109,6 +112,7 @@ export const SnapshotComparison: React.FC = () => {
     path: settings.externalPath,
     configs: [],
     type: 'external',
+    mounted: true,
   });
 
   const [selectedConfigs, setSelectedConfigs] = useState<Set<string>>(new Set());
@@ -147,16 +151,18 @@ export const SnapshotComparison: React.FC = () => {
     try {
       // allSettled, not all: one disk failing must not blank the other panel.
       const [leftResult, rightResult] = await Promise.allSettled([
-        loadConfigs(left.path),
-        loadConfigs(right.path),
+        loadConfigStatus(left.path),
+        loadConfigStatus(right.path),
       ]);
       setLeft((prev) => ({
         ...prev,
-        configs: leftResult.status === 'fulfilled' ? leftResult.value : [],
+        configs: leftResult.status === 'fulfilled' ? leftResult.value.configs : [],
+        mounted: leftResult.status === 'fulfilled' ? leftResult.value.mounted : prev.mounted,
       }));
       setRight((prev) => ({
         ...prev,
-        configs: rightResult.status === 'fulfilled' ? rightResult.value : [],
+        configs: rightResult.status === 'fulfilled' ? rightResult.value.configs : [],
+        mounted: rightResult.status === 'fulfilled' ? rightResult.value.mounted : prev.mounted,
       }));
       const failed: string[] = [];
       for (const [disk, result] of [
@@ -278,15 +284,20 @@ export const SnapshotComparison: React.FC = () => {
     }
   };
 
-  // Parent links are read from the backup disk, once per expanded config. The
+  // Parent links are read once per expanded config: from the backup disk for the
+  // external disk, from the local export for the local disk. The
   // reload in toggleExpanded drops them, so they are read again after a change.
   useEffect(() => {
     for (const disk of [left, right]) {
-      if (disk.type !== 'external') continue;
+      if (disk.type === 'external' && !disk.mounted) continue;
       for (const cfg of disk.configs) {
         const key = configKey(disk.path, cfg.name);
         if (!expandedConfigs.has(key) || parentLinks[key]) continue;
-        loadBackupLinks(cfg.name, disk.path)
+        const read =
+          disk.type === 'external'
+            ? loadBackupLinks(cfg.name, disk.path)
+            : loadLocalLinks(cfg.name, disk.path);
+        read
           .then((parentOf) => setParentLinks((prev) => ({ ...prev, [key]: parentOf })))
           .catch((err) => console.error(`Could not read links for ${cfg.name} on ${disk.path}:`, err));
       }
@@ -678,15 +689,13 @@ export const SnapshotComparison: React.FC = () => {
             onSelect: () => handleBrowse(menu.config, menu.snapshotId, menu.diskPath),
           },
         ];
-        if (menu.diskType === 'external') {
-          const chain = links ? chainOf(menu.snapshotId, links) : [];
-          items.push({
-            label: links ? `Select chain (${chain.length})` : 'Select chain',
-            disabled: !links,
-            title: links ? undefined : 'Links from the backup disk are still loading or unavailable',
-            onSelect: () => selectSnapshots(menu.diskPath, menu.config, chain),
-          });
-        }
+        const chain = links ? chainOf(menu.snapshotId, links) : [];
+        items.push({
+          label: links ? `Select chain (${chain.length})` : 'Select chain',
+          disabled: !links,
+          title: links ? undefined : 'Links for this disk are not available yet. Run the links export, then reload.',
+          onSelect: () => selectSnapshots(menu.diskPath, menu.config, chain),
+        });
         return (
           <SnapshotActionMenu
             x={menu.x}
@@ -810,7 +819,7 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                     <button
                       className={styles.actionBtn}
                       disabled
-                      title="Deleting is not built yet (Phase 2)"
+                      title="Deletion is not wired yet. The read-only only-copy check comes first (NHA-107)."
                     >
                       Delete…
                     </button>
@@ -870,7 +879,22 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
           </div>
           );
         })}
-        {disk.configs.length === 0 && (
+        {disk.configs.length === 0 && disk.type === 'external' && !disk.mounted && (
+          <div role="alert" className={styles.empty}>
+            <p>
+              The backup disk is not mounted at {disk.path}. Backup copies cannot be
+              checked, so deleting is blocked.
+            </p>
+            <p>
+              Mount the disk, then refresh the links:
+              <br />
+              <code>sudo mount {disk.path}</code>
+              <br />
+              <code>sudo ./scripts/export_backup_links.sh {disk.path} /var/lib/snapshot-sync/links</code>
+            </p>
+          </div>
+        )}
+        {disk.configs.length === 0 && (disk.type !== 'external' || disk.mounted) && (
           <p className={styles.empty}>No configs found</p>
         )}
       </div>

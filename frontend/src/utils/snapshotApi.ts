@@ -42,7 +42,9 @@ async function throwIfNotOk(response: Response, fallback: string): Promise<void>
 /**
  * Loads snapshot configurations for a given path
  */
-export async function loadConfigs(path: string): Promise<SnapperConfig[]> {
+export async function loadConfigStatus(
+  path: string
+): Promise<{ configs: SnapperConfig[]; mounted: boolean }> {
   try {
     const response = await fetch(
       `${apiBaseUrl}/api/configs?path=${encodeURIComponent(path)}`
@@ -51,7 +53,7 @@ export async function loadConfigs(path: string): Promise<SnapperConfig[]> {
       throw new Error('Failed to load configs');
     }
     const data = await response.json();
-    return data.configs || [];
+    return { configs: data.configs || [], mounted: data.mounted !== false };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     throw new Error(msg);
@@ -206,4 +208,20 @@ export async function loadBackupLinks(
     console.error('Error loading backup links:', error);
     throw error;
   }
+}
+
+/**
+ * Reads the parent links of the local disk for one config, from the local export.
+ */
+export async function loadLocalLinks(
+  configName: string,
+  path: string
+): Promise<Record<string, string | null>> {
+  const query = `?${new URLSearchParams({ path })}`;
+  const response = await fetch(
+    `${apiBaseUrl}/api/local-chains/${encodeURIComponent(configName)}${query}`
+  );
+  await throwIfNotOk(response, 'Failed to read local links');
+  const data = await response.json();
+  return data.parentOf ?? {};
 }
