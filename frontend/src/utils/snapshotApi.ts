@@ -53,7 +53,10 @@ export async function loadConfigStatus(
       throw new Error('Failed to load configs');
     }
     const data = await response.json();
-    return { configs: data.configs || [], mounted: data.mounted !== false };
+    return {
+      configs: Array.isArray(data.configs) ? data.configs : [],
+      mounted: data.mounted !== false,
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     throw new Error(msg);

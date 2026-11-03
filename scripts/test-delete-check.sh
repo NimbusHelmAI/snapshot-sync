@@ -3,6 +3,11 @@
 # into a temp folder and runs the assertions with node. Changes nothing in the repo.
 set -euo pipefail
 
+# Needs node and npx for the delete-rule tests, and python3 for the JSON checks.
+for tool in node npx python3; do
+  command -v "$tool" >/dev/null || { echo "missing $tool: install it to run this test" >&2; exit 1; }
+done
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT

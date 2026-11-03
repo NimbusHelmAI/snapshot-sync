@@ -3,6 +3,11 @@
 # exported files. Needs no btrfs and no root. Changes nothing outside a temp folder.
 set -euo pipefail
 
+# Needs node and npx for the delete-rule tests, and python3 for the JSON checks.
+for tool in node npx python3; do
+  command -v "$tool" >/dev/null || { echo "missing $tool: install it to run this test" >&2; exit 1; }
+done
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT

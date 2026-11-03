@@ -44,6 +44,12 @@ function writeSettings(settings: Settings): void {
 
 let BACKUP_DISK: string =
   readSettings().backupDisk || '';
+// The startup value comes from config.yml or the environment, which are not checked the
+// way PUT /api/settings checks them. A relative path is refused here and treated as unset.
+if (BACKUP_DISK && !nodePath.isAbsolute(BACKUP_DISK)) {
+  console.error(`Ignoring backup path "${BACKUP_DISK}": it must be an absolute path`);
+  BACKUP_DISK = '';
+}
 
 // ---------------------------------------------------------------------------
 // Network exposure
