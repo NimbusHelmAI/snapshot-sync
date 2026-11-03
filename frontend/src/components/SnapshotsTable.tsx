@@ -14,6 +14,7 @@
 
 import React, { useState, useMemo } from 'react';
 import type { Snapshot } from '../types';
+import type { ColorScheme } from './ColorCustomizer';
 import { formatSize } from '../utils/snapshotApi';
 import styles from './SnapshotsTable.module.css';
 
@@ -28,6 +29,7 @@ interface SnapshotsTableProps {
   onContextMenu?: (id: string, x: number, y: number) => void;
   showBackupStatus?: boolean;
   backupSyncedIds?: Set<string>;
+  customColors?: ColorScheme;
 }
 
 /** The snapshot's type: the API's type field, else inferred from the ID suffix. */
@@ -64,6 +66,7 @@ export const SnapshotsTable: React.FC<SnapshotsTableProps> = ({
   onContextMenu,
   showBackupStatus = false,
   backupSyncedIds = new Set(),
+  customColors,
 }) => {
   const [sortColumn, setSortColumn] = useState<SortColumn>('date');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
@@ -234,7 +237,18 @@ export const SnapshotsTable: React.FC<SnapshotsTableProps> = ({
                       {snapshot.date || '—'}
                     </td>
                     <td className={styles.typeCol}>
-                      <span className={styles.typeTag}>
+                      <span
+                        className={styles.typeTag}
+                        style={
+                          customColors && customColors[type as keyof typeof customColors]
+                            ? {
+                                backgroundColor: customColors[type as keyof typeof customColors].bg,
+                                color: customColors[type as keyof typeof customColors].text,
+                                borderColor: customColors[type as keyof typeof customColors].border,
+                              }
+                            : {}
+                        }
+                      >
                         {type}
                       </span>
                     </td>

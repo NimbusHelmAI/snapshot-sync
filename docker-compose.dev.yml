@@ -22,6 +22,7 @@ services:
       # Used by main's server; the feature branch reads the path from config.yml.
       - BACKUP_DISK=/mnt/Backup
       - SCRIPTS_DIR=/scripts
+      - LINKS_DIR=/links
       - SRC_SNAPSHOT_DIR=${SRC_SNAPSHOT_DIR:?set by start-dev.sh}
     volumes:
       - ./backend/src:/app/src
@@ -30,6 +31,8 @@ services:
       - /home/.snapshots:/home/.snapshots:ro
       - ${SRC_SNAPSHOT_DIR:?set by start-dev.sh}:${SRC_SNAPSHOT_DIR:?set by start-dev.sh}:ro
       - ${BACKUP_DISK:?set by start-dev.sh}:/mnt/Backup:ro
+      # Parent links written on the host by scripts/export_backup_links.sh.
+      - /var/lib/snapshot-sync/links:/links:ro
       - ./scripts:/scripts:ro
     restart: "no"
     # Dev only: label=disable stops SELinux from blocking the bind mounts above
