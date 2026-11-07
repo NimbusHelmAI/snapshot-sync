@@ -228,3 +228,109 @@ export async function loadLocalLinks(
   const data = await response.json();
   return data.parentOf ?? {};
 }
+
+/** Which disk a delete removes snapshots from. */
+export type DeleteSide = 'source' | 'backup';
+
+/** What a delete would do, before the user confirms it. Nothing is queued by a preview. */
+export interface DeletePlan {
+  side: DeleteSide;
+  /** Snapshots that would be deleted if confirmed. */
+  allowed: string[];
+  /** Snapshots that would not be deleted, and why. */
+  refused: { id: string; reason: string }[];
+  /** Snapshots among `allowed` that have no copy on the other disk. */
+  onlyCopy: string[];
+}
+
+/** The outcome of a queued delete, written by the host script. */
+export interface DeleteResult {
+  requestId: string;
+  config: string;
+  side: DeleteSide;
+  path: string;
+  status: 'done' | 'partial' | 'refused' | 'failed';
+  deleted: string[];
+  refused: { id: string; reason: string }[];
+  onlyCopy: string[];
+  error?: string;
+  finishedAt: string | null;
+}
+
+/** Body of a delete request. dryRun previews the plan and queues nothing. */
+interface DeleteBody {
+  config: string;
+  side: DeleteSide;
+  ids: string[];
+  path: string;
+  confirmOnlyCopy: boolean;
+  dryRun?: boolean;
+}
+
+async function postDelete(body: DeleteBody): Promise<Response> {
+  return fetch(`${apiBaseUrl}/api/delete-requests`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Previews a delete: what would be deleted, what would be refused, and which
+ * snapshots are the only copy. Confirm with the user before requesting it.
+ */
+export async function previewDelete(
+  side: DeleteSide,
+  configName: string,
+  ids: string[],
+  path: string
+): Promise<DeletePlan> {
+  // confirmOnlyCopy is true so the preview shows the most that could go; the
+  // dialog only lets the user submit when it has confirmed the only copies.
+  const response = await postDelete({
+    config: configName,
+    side,
+    ids,
+    path,
+    confirmOnlyCopy: true,
+    dryRun: true,
+  });
+  await throwIfNotOk(response, 'Could not check the delete');
+  return response.json();
+}
+
+/**
+ * Queues a delete for the host to run. Returns the request id to poll with
+ * loadDeleteResult. A 409 means the batch changed since the preview.
+ */
+export async function requestDelete(
+  side: DeleteSide,
+  configName: string,
+  ids: string[],
+  path: string,
+  confirmOnlyCopy: boolean
+): Promise<string> {
+  const response = await postDelete({
+    config: configName,
+    side,
+    ids,
+    path,
+    confirmOnlyCopy,
+  });
+  await throwIfNotOk(response, 'Could not queue the delete');
+  const data = await response.json();
+  return data.requestId;
+}
+
+/**
+ * Reads the result of a queued delete. Returns null while the host has not
+ * finished it.
+ */
+export async function loadDeleteResult(requestId: string): Promise<DeleteResult | null> {
+  const response = await fetch(
+    `${apiBaseUrl}/api/delete-requests/${encodeURIComponent(requestId)}`
+  );
+  if (response.status === 202) return null;
+  await throwIfNotOk(response, 'Could not read the delete result');
+  return response.json();
+}

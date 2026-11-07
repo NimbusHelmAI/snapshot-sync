@@ -3,7 +3,17 @@ import fs, { existsSync, readdirSync } from 'fs';
 import { execFileSync } from 'child_process';
 import path, { join } from 'path';
 import cors from 'cors';
-import { checkDelete, localParentOf, BackupExport, LocalExport } from './deleteCheck';
+import {
+  checkDelete,
+  checkBackupDelete,
+  localParentOf,
+  planDelete,
+  sourceItem,
+  backupItem,
+  BackupExport,
+  LocalExport,
+} from './deleteCheck';
+import { randomUUID } from 'crypto';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3001);
@@ -43,7 +53,7 @@ function writeSettings(settings: Settings): void {
 }
 
 let BACKUP_DISK: string =
-  readSettings().backupDisk || '';
+  readSettings().backupDisk || process.env.BACKUP_DISK || '';
 // The startup value comes from config.yml or the environment, which are not checked the
 // way PUT /api/settings checks them. A relative path is refused here and treated as unset.
 if (BACKUP_DISK && !nodePath.isAbsolute(BACKUP_DISK)) {
@@ -160,6 +170,20 @@ function listDirEntries(dir: string): string[] | null {
   return sudoRead(['ls', '--', dir]).split('\n').filter((e) => e.length > 0);
 }
 
+/**
+ * True when a backup entry is a btrfs subvolume. The root directory of every
+ * btrfs subvolume has inode 256; a plain folder does not. Only subvolumes are
+ * snapshots, so a plain folder on the backup disk must not be listed as one.
+ */
+const BTRFS_SUBVOLUME_ROOT_INODE = 256;
+function isBackupSubvolume(dir: string): boolean {
+  try {
+    return fs.statSync(dir).ino === BTRFS_SUBVOLUME_ROOT_INODE;
+  } catch {
+    return false;
+  }
+}
+
 /** One small text file, read unprivileged first and under `sudo -n cat` on a permission error. */
 function readTextFile(file: string): string {
   try {
@@ -189,10 +213,15 @@ function describeError(error: unknown): string {
  * Only numeric entries count -- the backup side also holds <id>.info.xml files
  * and the sync script's state file.
  */
-function listSnapshotIds(configPath: string): string[] | null {
+function listSnapshotIds(configPath: string, subvolumesOnly = false): string[] | null {
   try {
     const entries = listDirEntries(configPath);
-    return entries ? entries.filter((e) => /^\d+$/.test(e.trim())).map((e) => e.trim()) : null;
+    return entries
+      ? entries
+          .filter((e) => /^\d+$/.test(e.trim()))
+          .map((e) => e.trim())
+          .filter((id) => !subvolumesOnly || isBackupSubvolume(path.join(configPath, id)))
+      : null;
   } catch (err) {
     // A missing directory is normal (config not set up on this disk) and stays
     // quiet. Anything else -- sudo refusing, a permission error -- must not look
@@ -261,6 +290,8 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
       
       entries.forEach(entry => {
         if (!/^\d+$/.test(entry)) return; // Skip non-numeric
+        // On the backup disk a numeric folder is a snapshot only if it is a subvolume.
+        if (isBackupPath(queryPath) && !isBackupSubvolume(path.join(configPath, entry))) return;
         
         try {
           const snapshotPath = path.join(configPath, entry);
@@ -322,6 +353,8 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
  * itself: listing subvolumes needs CAP_SYS_ADMIN, which the container is not given.
  */
 const LINKS_DIR = process.env.LINKS_DIR || '';
+// Delete requests are queued in DELETE_DIR/requests; the host runs them from DELETE_DIR/results.
+const DELETE_DIR = process.env.DELETE_DIR || '';
 
 app.get('/api/backup-chains/:config', (req: Request, res: Response) => {
   const config = req.params.config;
@@ -346,6 +379,9 @@ app.get('/api/backup-chains/:config', (req: Request, res: Response) => {
     }
     res.json({ path: queryPath, config, exportedAt: data.exportedAt, parentOf: data.parentOf ?? {} });
   } catch (error) {
+    if (error instanceof ExportFormatError) {
+      return res.status(409).json({ error: error.message });
+    }
     if (isMissingError(error)) {
       return res.status(404).json({ error: `No exported links for ${config}` });
     }
@@ -358,7 +394,22 @@ app.get('/api/backup-chains/:config', (req: Request, res: Response) => {
 // Read-only delete check. It reads the two exports and never touches a snapshot.
 // Refuses when either export is missing, so an absent file never looks like
 // "not on source" or "no backup copy".
-const DELETE_CHECK_MAX_AGE_MS = 15 * 60 * 1000; // exports run every 5 minutes
+const DELETE_CHECK_MAX_AGE_MS = 75 * 60 * 1000; // exports run hourly (snapper-tag-links.timer)
+
+/** Thrown when a backup export is from an older script and lacks the tables the checks read. */
+class ExportFormatError extends Error {}
+
+/** Reads the backup export, refusing the old format instead of crashing on a missing table. */
+function readBackupExport(file: string): BackupExport {
+  const data = JSON.parse(readTextFile(file));
+  if (!data || typeof data.snapshots !== 'object' || data.snapshots === null
+      || typeof data.parentOf !== 'object' || data.parentOf === null) {
+    throw new ExportFormatError(
+      `${file} is in an old format (no snapshots table). Run the backup links export again: scripts/export_backup_links.sh`
+    );
+  }
+  return data as BackupExport;
+}
 
 // Parent links of the local disk, from the local export (scripts/export_local_links.sh).
 app.get('/api/local-chains/:config', (req: Request, res: Response) => {
@@ -374,6 +425,9 @@ app.get('/api/local-chains/:config', (req: Request, res: Response) => {
     const data: LocalExport = JSON.parse(readTextFile(file));
     res.json({ config, exportedAt: data.exportedAt, parentOf: localParentOf(data) });
   } catch (error) {
+    if (error instanceof ExportFormatError) {
+      return res.status(409).json({ error: error.message });
+    }
     if (isMissingError(error)) {
       return res.status(404).json({ error: `No exported local links for ${config}` });
     }
@@ -404,7 +458,7 @@ app.get('/api/delete-check/:config/:id', (req: Request, res: Response) => {
   }
   try {
     const local: LocalExport = JSON.parse(readTextFile(path.join(LINKS_DIR, `local-${config}.json`)));
-    const backup: BackupExport = JSON.parse(readTextFile(path.join(LINKS_DIR, `${config}.json`)));
+    const backup: BackupExport = readBackupExport(path.join(LINKS_DIR, `${config}.json`));
     if (backup.path !== queryPath) {
       return res.status(409).json({ error: `Links were exported for ${backup.path}, not ${queryPath}` });
     }
@@ -419,6 +473,9 @@ app.get('/api/delete-check/:config/:id', (req: Request, res: Response) => {
       stale,
     });
   } catch (error) {
+    if (error instanceof ExportFormatError) {
+      return res.status(409).json({ error: error.message });
+    }
     if (isMissingError(error)) {
       return res.status(404).json({ error: `No exported links for ${config}; run the links export first` });
     }
@@ -426,6 +483,184 @@ app.get('/api/delete-check/:config/:id', (req: Request, res: Response) => {
     console.error(`Delete check failed for ${config}/${id}: ${message}`);
     res.status(500).json({ error: message });
   }
+});
+
+// The backup side of the delete check: a backup copy, its source snapshots, and what is built on it.
+app.get('/api/backup-delete-check/:config/:id', (req: Request, res: Response) => {
+  const config = req.params.config;
+  const id = req.params.id;
+  if (!(CONFIG_NAMES as readonly string[]).includes(config)) {
+    return res.status(400).json({ error: `Unknown config: ${config}` });
+  }
+  if (!SAFE_SEGMENT.test(id)) {
+    return res.status(400).json({ error: 'invalid snapshot id' });
+  }
+  const queryPath = typeof req.query.path === 'string' ? req.query.path : '';
+  if (!queryPath || !isBackupPath(queryPath)) {
+    return res.status(400).json({ error: 'path must be the backup disk' });
+  }
+  if (!LINKS_DIR) {
+    return res.status(503).json({ error: 'LINKS_DIR is not set; links are not exported' });
+  }
+  try {
+    const local: LocalExport = JSON.parse(readTextFile(path.join(LINKS_DIR, `local-${config}.json`)));
+    const backup: BackupExport = readBackupExport(path.join(LINKS_DIR, `${config}.json`));
+    if (backup.path !== queryPath) {
+      return res.status(409).json({ error: `Links were exported for ${backup.path}, not ${queryPath}` });
+    }
+    const now = Date.now();
+    const stale =
+      now - Date.parse(local.exportedAt) > DELETE_CHECK_MAX_AGE_MS ||
+      now - Date.parse(backup.exportedAt) > DELETE_CHECK_MAX_AGE_MS;
+    return res.json({
+      ...checkBackupDelete(config, id, local, backup),
+      localExportedAt: local.exportedAt,
+      backupExportedAt: backup.exportedAt,
+      stale,
+    });
+  } catch (error) {
+    if (error instanceof ExportFormatError) {
+      return res.status(409).json({ error: error.message });
+    }
+    if (isMissingError(error)) {
+      return res.status(404).json({ error: `No exported links for ${config}; run the links export first` });
+    }
+    const message = describeError(error);
+    console.error(`Backup delete check failed for ${config}/${id}: ${message}`);
+    return res.status(500).json({ error: message });
+  }
+});
+
+// Delete requests. The API only checks a batch and queues it. The host runs
+// scripts/delete_requests.py as root, which checks again from btrfs before it deletes.
+const DELETE_BATCH_MAX = 50;
+const REQUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+app.post('/api/delete-requests', (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as {
+    config?: unknown;
+    ids?: unknown;
+    path?: unknown;
+    side?: unknown;
+    confirmOnlyCopy?: unknown;
+    dryRun?: unknown;
+  };
+  const config = body.config;
+  if (typeof config !== 'string' || !(CONFIG_NAMES as readonly string[]).includes(config)) {
+    return res.status(400).json({ error: 'Unknown config' });
+  }
+  const ids = body.ids;
+  if (
+    !Array.isArray(ids) ||
+    ids.length === 0 ||
+    ids.length > DELETE_BATCH_MAX ||
+    !ids.every((id) => typeof id === 'string' && /^[0-9]+$/.test(id))
+  ) {
+    return res.status(400).json({ error: `Pick 1 to ${DELETE_BATCH_MAX} snapshots by number` });
+  }
+  const batch = ids as string[];
+  if (new Set(batch).size !== batch.length) {
+    return res.status(400).json({ error: 'Duplicate snapshot ids' });
+  }
+  const queryPath = typeof body.path === 'string' ? body.path : '';
+  if (!queryPath || !isBackupPath(queryPath)) {
+    return res.status(400).json({ error: 'path must be the backup disk' });
+  }
+  if (!isMountPoint(queryPath)) {
+    return res.status(503).json({ error: 'Backup disk is not mounted; deletion is blocked until it is' });
+  }
+  if (!LINKS_DIR || !DELETE_DIR) {
+    return res.status(503).json({ error: 'LINKS_DIR and DELETE_DIR must be set' });
+  }
+  let local: LocalExport;
+  let backup: BackupExport;
+  try {
+    local = JSON.parse(readTextFile(path.join(LINKS_DIR, `local-${config}.json`)));
+    backup = readBackupExport(path.join(LINKS_DIR, `${config}.json`));
+  } catch (error) {
+    if (error instanceof ExportFormatError) {
+      return res.status(409).json({ error: error.message });
+    }
+    if (isMissingError(error)) {
+      return res.status(404).json({ error: `No exported links for ${config}; run the links export first` });
+    }
+    return res.status(500).json({ error: describeError(error) });
+  }
+  if (backup.path !== queryPath) {
+    return res.status(409).json({ error: `Links were exported for ${backup.path}, not ${queryPath}` });
+  }
+  const now = Date.now();
+  if (
+    now - Date.parse(local.exportedAt) > DELETE_CHECK_MAX_AGE_MS ||
+    now - Date.parse(backup.exportedAt) > DELETE_CHECK_MAX_AGE_MS
+  ) {
+    return res.status(409).json({ error: 'The links export is older than 15 minutes; wait for the next export' });
+  }
+  // side: 'source' deletes from the local disk, 'backup' from the backup disk.
+  const side = body.side === 'backup' ? 'backup' : 'source';
+  const confirmOnlyCopy = body.confirmOnlyCopy === true;
+  const items = batch.map((id) =>
+    side === 'source'
+      ? sourceItem(checkDelete(config, id, local, backup))
+      : backupItem(checkBackupDelete(config, id, local, backup)),
+  );
+  const plan = planDelete(items, side, confirmOnlyCopy);
+  // dryRun: the dialog shows the plan before the user confirms. Nothing is queued.
+  if (body.dryRun === true) {
+    return res.json({ side, allowed: plan.allowed, refused: plan.refused, onlyCopy: plan.onlyCopy });
+  }
+  if (plan.refused.length > 0) {
+    return res.status(409).json({
+      error: 'Some snapshots cannot be deleted',
+      refused: plan.refused,
+      onlyCopy: plan.onlyCopy,
+    });
+  }
+  const requestId = randomUUID();
+  const requestsDir = path.join(DELETE_DIR, 'requests');
+  const file = path.join(requestsDir, `${requestId}.json`);
+  try {
+    fs.mkdirSync(requestsDir, { recursive: true });
+    fs.writeFileSync(
+      `${file}.tmp`,
+      JSON.stringify({
+        requestId,
+        config,
+        side,
+        ids: batch,
+        confirmOnlyCopy,
+        path: queryPath,
+        requestedAt: new Date().toISOString(),
+      }),
+    );
+    fs.renameSync(`${file}.tmp`, file);
+  } catch (error) {
+    const message = describeError(error);
+    console.error(`Could not write delete request ${file}: ${message}`);
+    return res.status(500).json({ error: message });
+  }
+  return res.status(202).json({ requestId });
+});
+
+app.get('/api/delete-requests/:requestId', (req: Request, res: Response) => {
+  const requestId = req.params.requestId;
+  if (!REQUEST_ID_RE.test(requestId)) {
+    return res.status(400).json({ error: 'invalid request id' });
+  }
+  if (!DELETE_DIR) {
+    return res.status(503).json({ error: 'DELETE_DIR is not set' });
+  }
+  try {
+    return res.json(JSON.parse(readTextFile(path.join(DELETE_DIR, 'results', `${requestId}.json`))));
+  } catch (error) {
+    if (!isMissingError(error)) {
+      return res.status(500).json({ error: describeError(error) });
+    }
+  }
+  if (existsSync(path.join(DELETE_DIR, 'requests', `${requestId}.json`))) {
+    return res.status(202).json({ status: 'pending' });
+  }
+  return res.status(404).json({ error: 'No such delete request' });
 });
 
 // Get snapshot details
@@ -958,7 +1193,7 @@ app.get('/api/configs', (req: Request, res: Response) => {
 
   for (const config of CONFIG_NAMES) {
     const configPath = local ? localConfigDir(config) : backupConfigDir(queryPath, config);
-    const ids = listSnapshotIds(configPath);
+    const ids = listSnapshotIds(configPath, !local);
     if (ids !== null) {
       configs.push({ name: config, path: config, snapshotCount: ids.length });
     }

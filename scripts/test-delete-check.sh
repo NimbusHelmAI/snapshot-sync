@@ -16,7 +16,7 @@ trap 'rm -rf "$OUT"' EXIT
 
 node - "$OUT/deleteCheck.js" <<'JS'
 const assert = require('node:assert/strict');
-const { checkDelete, localParentOf } = require(process.argv[2]);
+const { checkDelete, checkBackupDelete, localParentOf, planDelete, sourceItem, backupItem } = require(process.argv[2]);
 
 const now = '2026-11-01T00:00:00Z';
 
@@ -87,6 +87,50 @@ assert.deepEqual(sorted.backupIds, ['999', '1000']);
 
 // 9. Local parents by UUID; a parent missing from the export maps to null.
 assert.deepEqual(localParentOf(local), { 1382: null, 1385: '1382', 1400: null });
+
+// 10. Backup side: a copy finds its source snapshots by received UUID.
+let b = checkBackupDelete('root', '1390', local, backup);
+assert.equal(b.onBackup, true);
+assert.deepEqual(b.sourceIds, ['1382']);
+assert.deepEqual(b.backupDependents, ['1391']);
+
+// 11. Backup side: a copy whose received UUID matches no source snapshot is an only copy.
+b = checkBackupDelete('root', '1382', local, backup);
+assert.deepEqual(b.sourceIds, []);
+assert.equal(b.onBackup, true);
+
+// 12. Backup side: not on the backup disk.
+b = checkBackupDelete('root', '1400', local, backup);
+assert.equal(b.onBackup, false);
+
+// 13. Source batch: a snapshot with a newer dependent outside the batch is refused.
+let plan = planDelete([sourceItem(checkDelete('root', '1382', local, backup))], 'source', false);
+assert.deepEqual(plan.allowed, []);
+assert.match(plan.refused[0].reason, /newer snapshot 1385 is built on it/);
+
+// 14. Source only copy: refused without confirmation, allowed with it.
+plan = planDelete([sourceItem(checkDelete('root', '1400', local, backup))], 'source', false);
+assert.deepEqual(plan.onlyCopy, ['1400']);
+assert.equal(plan.refused[0].reason, 'only copy: no backup holds it; confirm to delete it');
+plan = planDelete([sourceItem(checkDelete('root', '1400', local, backup))], 'source', true);
+assert.deepEqual(plan.allowed, ['1400']);
+
+// 15. Source: not on the source disk.
+plan = planDelete([sourceItem(checkDelete('root', '999', local, backup))], 'source', false);
+assert.equal(plan.refused[0].reason, 'not on the source disk');
+
+// 16. Backup batch: a copy built on by another copy in the batch is allowed together.
+plan = planDelete([
+  backupItem(checkBackupDelete('root', '1390', local, backup)),
+  backupItem(checkBackupDelete('root', '1391', local, backup)),
+], 'backup', false);
+assert.deepEqual(plan.allowed, ['1390', '1391']);
+
+// 17. Backup only copy: refused without confirmation, allowed with it.
+plan = planDelete([backupItem(checkBackupDelete('root', '1382', local, backup))], 'backup', false);
+assert.equal(plan.refused[0].reason, 'only copy: no source snapshot holds it; confirm to delete it');
+plan = planDelete([backupItem(checkBackupDelete('root', '1382', local, backup))], 'backup', true);
+assert.deepEqual(plan.allowed, ['1382']);
 
 console.log('delete-check: all assertions passed');
 JS

@@ -16,6 +16,8 @@ import { SnapshotsTable } from './SnapshotsTable';
 import { SnapshotActionMenu } from './SnapshotActionMenu';
 import type { MenuItem } from './SnapshotActionMenu';
 import { chainOf } from '../utils/snapshotChains';
+import { DeleteDialog } from './DeleteDialog';
+import type { DeleteResult, DeleteSide } from '../utils/snapshotApi';
 
 /** Shown on the controls that are deliberately inert until NHA-93 lands. */
 const SYNC_DISABLED_HINT =
@@ -70,6 +72,15 @@ interface DiskSide {
   type: 'local' | 'external';
   /** False when the backup disk is not mounted. Always true for the local disk. */
   mounted: boolean;
+}
+
+/** The open delete dialog: which snapshots, on which disk, and which side they are on. */
+interface DeleteTarget {
+  side: DeleteSide;
+  diskLabel: string;
+  diskPath: string;
+  config: string;
+  ids: string[];
 }
 
 /** The open row menu: which snapshot it is for, and where to draw it. */
@@ -135,6 +146,7 @@ export const SnapshotComparison: React.FC = () => {
   const [parentLinks, setParentLinks] = useState<Record<string, Record<string, string | null>>>({});
   // The open row menu (⋯ or right-click). Null means closed.
   const [menu, setMenu] = useState<SnapshotMenu | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
 
   // File preview, layered over the browse list. Null means nothing is open.
   const [preview, setPreview] = useState<FilePreview | null>(null);
@@ -323,6 +335,50 @@ export const SnapshotComparison: React.FC = () => {
       });
       return next;
     });
+  };
+
+  /** Opens the delete dialog for the selected snapshots of one config on one disk. */
+  const openDelete = (disk: DiskSide, configName: string, ids: string[]) => {
+    setDeleteTarget({
+      side: disk.type === 'local' ? 'source' : 'backup',
+      diskLabel: disk.label,
+      diskPath: disk.path,
+      config: configName,
+      ids,
+    });
+  };
+
+  /** Removes snapshots from the selection of one config on one disk. */
+  const deselectSnapshots = (diskPath: string, configName: string, ids: string[]) => {
+    setSelectedSnapshots((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(snapshotKey(diskPath, configName, id)));
+      return next;
+    });
+  };
+
+  /** Reloads one config's snapshot list on one disk after a delete. */
+  const reloadSnapshots = async (diskPath: string, configName: string) => {
+    const key = configKey(diskPath, configName);
+    try {
+      const snapshots = await loadSnapshots(configName, diskPath);
+      setLoadedSnapshots((prev) => ({ ...prev, [key]: snapshots }));
+      setParentLinks((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    } catch (err) {
+      console.error(`Failed to reload snapshots for ${configName} on ${diskPath}:`, err);
+      setError(`Failed to reload snapshots for ${configName} on ${diskPath}`);
+    }
+  };
+
+  /** After a delete: drop the deleted ids from the selection and reload the lists. */
+  const handleDeleteDone = (result: DeleteResult) => {
+    deselectSnapshots(result.path, result.config, result.deleted);
+    reloadSnapshots(result.path, result.config);
+    refreshConfigs();
   };
 
   const toggleSnapshot = (diskPath: string, configName: string, snapshotId: string) => {
@@ -634,6 +690,7 @@ export const SnapshotComparison: React.FC = () => {
           onRestore={handleRestore}
           onOpenMenu={openMenu}
           onClearSelection={clearSelection}
+          onDelete={openDelete}
         />
 
         {/*
@@ -678,9 +735,21 @@ export const SnapshotComparison: React.FC = () => {
           onRestore={handleRestore}
           onOpenMenu={openMenu}
           onClearSelection={clearSelection}
+          onDelete={openDelete}
         />
       </div>
 
+      {deleteTarget && (
+        <DeleteDialog
+          side={deleteTarget.side}
+          diskLabel={deleteTarget.diskLabel}
+          diskPath={deleteTarget.diskPath}
+          config={deleteTarget.config}
+          ids={deleteTarget.ids}
+          onClose={() => setDeleteTarget(null)}
+          onDone={handleDeleteDone}
+        />
+      )}
       {menu && (() => {
         const links = parentLinks[configKey(menu.diskPath, menu.config)];
         const items: MenuItem[] = [
@@ -744,6 +813,8 @@ interface DiskPanelProps {
     y: number
   ) => void;
   onClearSelection: (diskPath: string, configName: string) => void;
+  /** Opens the delete dialog for the selected ids of one config on this disk. */
+  onDelete: (disk: DiskSide, configName: string, ids: string[]) => void;
 }
 
 const DiskPanel: React.FC<DiskPanelProps> = ({
@@ -760,6 +831,7 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
   onRestore,
   onOpenMenu,
   onClearSelection,
+  onDelete,
   // selectedConfig and onConfigSelect - TODO: implement config override UI
 }) => {
   const icon = disk.type === 'local' ? '💾' : '💿';
@@ -816,13 +888,15 @@ const DiskPanel: React.FC<DiskPanelProps> = ({
                     <button className={styles.actionBtn} onClick={() => onClearSelection(disk.path, cfg.name)}>
                       Clear
                     </button>
-                    <button
-                      className={styles.actionBtn}
-                      disabled
-                      title="Deletion is not wired yet. The read-only only-copy check comes first (NHA-107)."
-                    >
-                      Delete…
-                    </button>
+                    {disk.type !== 'local' && (
+                      <button
+                        className={styles.actionBtn}
+                        onClick={() => onDelete(disk, cfg.name, selectedIds)}
+                        title="Delete the selected snapshots from this disk"
+                      >
+                        Delete…
+                      </button>
+                    )}
                   </div>
                 )}
                 {snapshots ? (

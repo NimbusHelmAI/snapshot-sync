@@ -116,3 +116,108 @@ export function localParentOf(local: LocalExport): Record<string, string | null>
   }
   return parentOf;
 }
+
+/** A backup copy, seen for deletion: its source snapshots and what is built on it. */
+export interface BackupDeleteCheck {
+  config: string;
+  id: string;
+  /** The copy exists on the backup disk. */
+  onBackup: boolean;
+  /** Local snapshots with the copy's source UUID (its received UUID). */
+  sourceIds: string[];
+  /** Backup copies built on this one. */
+  backupDependents: string[];
+}
+
+/** Checks one backup copy. The local export is read for its source snapshots. */
+export function checkBackupDelete(
+  config: string,
+  id: string,
+  local: LocalExport | null,
+  backup: BackupExport | null,
+): BackupDeleteCheck {
+  const copy = backup?.snapshots[id] ?? null;
+  if (!copy) {
+    return { config, id, onBackup: false, sourceIds: [], backupDependents: [] };
+  }
+  const sourceIds = Object.keys(local?.snapshots ?? {})
+    .filter((sid) => copy.receivedUuid !== null && local!.snapshots[sid].uuid === copy.receivedUuid)
+    .sort(byNumber);
+  const backupDependents = Object.keys(backup!.parentOf)
+    .filter((bid) => backup!.parentOf[bid] === id)
+    .sort(byNumber);
+  return { config, id, onBackup: true, sourceIds, backupDependents };
+}
+
+/** One snapshot of a delete batch, seen from the side being deleted. */
+export interface BatchItem {
+  id: string;
+  /** Exists on the side being deleted. */
+  exists: boolean;
+  /** Ids on the other side holding the same data. Empty means this is the only copy. */
+  copies: string[];
+  /** Newer snapshots on the side being deleted that are built on it. */
+  dependents: string[];
+}
+
+export function sourceItem(c: DeleteCheck): BatchItem {
+  return { id: c.id, exists: c.onSource, copies: c.backupIds, dependents: c.localDependents };
+}
+
+export function backupItem(c: BackupDeleteCheck): BatchItem {
+  return { id: c.id, exists: c.onBackup, copies: c.sourceIds, dependents: c.backupDependents };
+}
+
+export interface DeletePlan {
+  /** Snapshots that will be deleted. */
+  allowed: string[];
+  /** Snapshots that will not be deleted, and why. */
+  refused: { id: string; reason: string }[];
+  /** Snapshots with no copy on the other side. They are deleted only when confirmed. */
+  onlyCopy: string[];
+}
+
+const ONLY_COPY_REASON: Record<'source' | 'backup', string> = {
+  source: 'only copy: no backup holds it',
+  backup: 'only copy: no source snapshot holds it',
+};
+
+/**
+ * Decides which snapshots of one batch may be deleted. The host script
+ * (scripts/delete_requests.py) applies the same rules again, from btrfs, before it
+ * deletes anything. A snapshot is refused when it is not on the side being deleted, or
+ * when a newer snapshot on that side is built on it and is not deleted in the same
+ * batch (the refusal then passes to its parent). A snapshot with no copy on the other
+ * side is refused unless the batch is confirmed.
+ */
+export function planDelete(items: BatchItem[], side: 'source' | 'backup', confirmOnlyCopy: boolean): DeletePlan {
+  const refused = new Map<string, string>();
+  const onlyCopy = items.filter((i) => i.exists && i.copies.length === 0).map((i) => i.id);
+  for (const item of items) {
+    if (!item.exists) {
+      refused.set(item.id, `not on the ${side} disk`);
+    } else if (onlyCopy.includes(item.id) && !confirmOnlyCopy) {
+      refused.set(item.id, `${ONLY_COPY_REASON[side]}; confirm to delete it`);
+    }
+  }
+  const batch = new Set(items.map((i) => i.id));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const item of items) {
+      if (refused.has(item.id)) continue;
+      const blocker = item.dependents.find((d) => !batch.has(d) || refused.has(d));
+      if (blocker !== undefined) {
+        refused.set(item.id, `newer snapshot ${blocker} is built on it and is not being deleted`);
+        changed = true;
+      }
+    }
+  }
+  return {
+    allowed: items.filter((i) => !refused.has(i.id)).map((i) => i.id),
+    refused: items
+      .filter((i) => refused.has(i.id))
+      .map((i) => ({ id: i.id, reason: refused.get(i.id)! })),
+    onlyCopy,
+  };
+}
