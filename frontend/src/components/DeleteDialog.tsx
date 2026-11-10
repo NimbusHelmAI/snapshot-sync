@@ -57,6 +57,7 @@ export const DeleteDialog: React.FC<DeleteDialogProps> = ({
   // Kept in a ref so a re-render of the caller does not restart the poll.
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
+  const dialogRef = useRef<HTMLDivElement>(null);
 
   const diskName = side === 'source' ? 'local disk' : 'backup disk';
   const otherName = side === 'source' ? 'backup disk' : 'local disk';
@@ -130,6 +131,42 @@ export const DeleteDialog: React.FC<DeleteDialogProps> = ({
     !submitting &&
     !result;
 
+  // Focus moves into the dialog, Tab stays inside it, and Escape closes it.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (!submitting) onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog) return;
+      const items = Array.from(
+        dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled])')
+      );
+      if (items.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      // Inside means a control in the dialog, not the dialog itself and not the page behind it.
+      const inside = active instanceof Node && dialog.contains(active) && active !== dialog;
+      if (event.shiftKey) {
+        if (!inside || active === first) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (!inside || active === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, submitting]);
+
   const submit = async () => {
     if (!plan) return;
     setSubmitError(null);
@@ -145,7 +182,14 @@ export const DeleteDialog: React.FC<DeleteDialogProps> = ({
 
   return (
     <div className={styles.overlay} role="presentation">
-      <div className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title">
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className={styles.dialog}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-dialog-title"
+      >
         <div className={styles.header}>
           <h2 id="delete-dialog-title">
             Delete from {diskName}: {diskLabel}
