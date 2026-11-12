@@ -3,10 +3,10 @@
 # Run once on the host, as root, from the repo. Re-running it is safe.
 #
 # Usage: sudo ./scripts/install_delete_units.sh [--backup-disk <path>] [--delete-dir <path>]
-# Defaults: backup disk /run/media/amitp/Backup, delete folder /var/lib/snapshot-sync/delete.
+# Defaults: backup disk /mnt/Backup, delete folder /var/lib/snapshot-sync/delete.
 set -euo pipefail
 
-BACKUP_DISK="/run/media/amitp/Backup"
+BACKUP_DISK="/mnt/Backup"
 DELETE_DIR="/var/lib/snapshot-sync/delete"
 while [ $# -gt 0 ]; do
   case "$1" in
