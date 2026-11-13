@@ -1,0 +1,11 @@
+# Runs the queued snapshot deletes as root (NHA-107). Each run checks every
+# request again from btrfs before it deletes anything. Installed by
+# scripts/install_delete_units.sh, which fills in the @...@ values.
+[Unit]
+Description=Run queued snapshot deletes
+
+[Service]
+Type=oneshot
+Environment=BACKUP_DISK=@BACKUP_DISK@
+Environment=DELETE_DIR=@DELETE_DIR@
+ExecStart=/usr/bin/python3 @REPO@/scripts/delete_requests.py --delete-dir @DELETE_DIR@
