@@ -8,7 +8,7 @@ services:
     ports:
       - "127.0.0.1:3001:3001"
     environment:
-      - BACKUP_DISK=/backup
+      - CONFIG_FILE=/config/config.yml
       - SCRIPTS_DIR=/scripts
       - PORT=3001
       # Inside the container the API must listen on all interfaces so the web
@@ -17,7 +17,8 @@ services:
       # The Vite proxy rewrites Host to the service name (changeOrigin).
       - ALLOWED_HOSTS=api
     volumes:
-      - /run/media/amitp/Backup:/backup:ro
+      - /mnt:/mnt:ro
+      - ./config.yml:/config/config.yml
       - ./scripts:/scripts:ro
     restart: unless-stopped
     networks:

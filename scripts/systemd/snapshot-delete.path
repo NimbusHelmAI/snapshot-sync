@@ -1,0 +1,11 @@
+# Starts snapshot-delete.service when a delete request file appears (NHA-107).
+# Installed by scripts/install_delete_units.sh.
+[Unit]
+Description=Watch for queued snapshot deletes
+
+[Path]
+PathChanged=@DELETE_DIR@/requests
+Unit=snapshot-delete.service
+
+[Install]
+WantedBy=multi-user.target

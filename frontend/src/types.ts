@@ -20,6 +20,11 @@ export interface Snapshot {
   id: string;
   /** "YYYY-MM-DD" from snapper's info.xml, or "unknown" when unavailable. */
   date: string;
+  /** Which snapper config the snapshot belongs to: root, home or src. */
+  config?: string;
+  type?: 'full' | 'daily' | 'weekly' | 'monthly' | 'yearly';
+  /** Exclusive size in bytes; absent when it could not be measured. */
+  size?: number;
 }
 
 export type BrowseItemType = 'directory' | 'file' | 'symlink' | 'other';

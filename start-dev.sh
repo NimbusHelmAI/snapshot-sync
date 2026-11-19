@@ -46,6 +46,11 @@ for p in /.snapshots /home/.snapshots "$SRC_SNAPSHOT_DIR"; do
   [ -d "$p" ] || { echo "❌ $p is missing"; exit 1; }
 done
 mountpoint -q "$BACKUP_DISK" || echo "⚠️  $BACKUP_DISK is not mounted; the backup side will show no configs"
+# Deleting snapshots needs the host delete units (NHA-107). Check that they are
+# installed and listening, and install or repair them if not. The dev stack still
+# starts when this fails; only delete is unavailable.
+scripts/ensure_delete_units.sh --backup-disk "$BACKUP_DISK" \
+  || echo "⚠️  the host delete units are not ready; deleting snapshots will not work"
 $COMPOSE up -d --build api
 for i in $(seq 1 120); do
   curl -fsS http://127.0.0.1:3001/api/health >/dev/null 2>&1 && break
